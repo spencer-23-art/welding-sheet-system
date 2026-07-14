@@ -1,0 +1,54 @@
+# 焊接在线表格平台 - 阶段一编排
+# 适配 2核2G：对各服务做了内存/CPU 上限限制
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: welding
+      POSTGRES_PASSWORD: welding123
+      POSTGRES_DB: welding
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    mem_limit: 700m
+    cpus: 1.0
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    restart: unless-stopped
+    mem_limit: 150m
+    cpus: 0.5
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://welding:welding123@postgres:5432/welding
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-prod-32bytes-long}
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+      REFRESH_TOKEN_EXPIRE_DAYS: "7"
+      REDIS_URL: redis://redis:6379/0
+      SUPERADMIN_USERNAME: admin
+      SUPERADMIN_PASSWORD: Admin@123456
+      SUPERADMIN_EMAIL: admin@example.com
+      CORS_ORIGINS: '["*"]'
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    mem_limit: 700m
+    cpus: 1.0
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    mem_limit: 150m
+    cpus: 0.5
+
+volumes:
+  pgdata:
