@@ -30,7 +30,7 @@ const routes = [
         component: () => import('@/views/AdminUsersView.vue'),
         meta: { perm: 'page:admin' },
       },
-      // 第二阶段：Univer 表格文档管理
+      // 腾讯文档接入（编辑在腾讯文档内进行，本页负责嵌入与同步）
       {
         path: 'sheets',
         name: 'sheets',
@@ -40,8 +40,14 @@ const routes = [
       {
         path: 'sheets/:id/edit',
         name: 'sheet-edit',
-        component: () => import('@/views/SheetEditorView.vue'),
+        component: () => import('@/views/TencentDocsView.vue'),
         meta: { perm: 'page:sheet' },
+      },
+      {
+        path: 'tencent-settings',
+        name: 'tencent-settings',
+        component: () => import('@/views/TencentSettingsView.vue'),
+        meta: { perm: 'page:admin' },
       },
     ],
   },

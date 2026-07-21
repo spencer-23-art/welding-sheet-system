@@ -7,6 +7,7 @@ from app.models.rbac import (
     role_permissions,
 )
 from app.models.welding import WeldingRecord
+from app.models.system import SystemConfig
 
 __all__ = [
     "Document",
@@ -16,4 +17,5 @@ __all__ = [
     "user_roles",
     "role_permissions",
     "WeldingRecord",
+    "SystemConfig",
 ]

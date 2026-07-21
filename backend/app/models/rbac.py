@@ -19,7 +19,6 @@ from sqlalchemy import (
     Integer,
     String,
     Table,
-    Text,
 )
 from sqlalchemy.orm import relationship
 

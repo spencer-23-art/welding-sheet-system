@@ -1,24 +1,29 @@
-"""表格 workbookData 保存 / 加载 API。
+"""表格数据 API（腾讯文档 → 本地缓存 架构）。
 
-保存链路：Univer(frontend) --workbookData JSON--> FastAPI --> PostgreSQL(JSONB)。
-加载链路：PostgreSQL --workbookData--> FastAPI --> Univer(frontend) 初始化。
+读取：大屏 / 统计全部从 welding_records（本地缓存）取，不经过腾讯文档 API。
+同步：POST /{doc_id}/sync 把腾讯文档表格（拉取或手动粘贴）解析入库并推送大屏。
 """
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.dependencies import get_current_user, require_permissions
+from app.dependencies import require_permissions
 from app.models.document import Document
 from app.models.rbac import User
-from app.models.welding import COLUMN_DEFS, WeldingRecord
-from app.schemas.document import RowSaveRequest, SheetLoadResponse, SheetSaveRequest
-from app.services import dashboard_service as ds
+from app.models.welding import WeldingRecord
+from app.services import tencent_config as tcfg, tencent_docs as td
 from app.services.row_permission import get_data_scope
-from app.services.univer_data import build_workbook_from_records, parse_workbook_to_records
 
 router = APIRouter(prefix="/api/sheets", tags=["sheets"])
+
+
+class SyncRequest(BaseModel):
+    tencent_url: Optional[str] = None
+    rows: Optional[list[list]] = None  # 手动粘贴的二维数据（首行为表头）
 
 
 def _get_sheet_or_404(db: Session, doc_id: int) -> Document:
@@ -38,187 +43,80 @@ def _assert_owner_or_perms(user: User, doc: Document, codenames: list[str]) -> N
         raise HTTPException(status_code=403, detail="无权操作该表格")
 
 
-def _upsert_welding_records(db: Session, doc: Document, records: list[dict]) -> None:
-    """将解析出的结构化记录 upsert 进 welding_records（DB 为单一数据源，不删除未出现行）。"""
-    existing = {
-        (r.pipeline_no, r.joint_no): r
-        for r in db.query(WeldingRecord).filter(WeldingRecord.document_id == doc.id).all()
-    }
-    attr_names = [c[0] for c in COLUMN_DEFS]
-    for idx, data in enumerate(records):
-        key = (data.get("pipeline_no") or "", data.get("joint_no") or "")
-        rec = existing.get(key)
-        if rec is None:
-            rec = WeldingRecord(
-                document_id=doc.id,
-                owner_id=doc.owner_id,
-                project_id=doc.project_id,
-                department_id=doc.department_id,
-                source="sheet",
-            )
-            db.add(rec)
-            existing[key] = rec
-        for attr in attr_names:
-            if attr in data:
-                setattr(rec, attr, data[attr])
-        rec.row_index = idx
+@router.get("/public")
+def list_public_sheets(db: Session = Depends(get_db)):
+    """公开列出所有表格文件（仅元信息），供大屏无登录选表。"""
+    docs = (
+        db.query(Document)
+        .filter(Document.is_folder.is_(False))
+        .filter(Document.is_deleted.is_(False))
+        .order_by(Document.id)
+        .all()
+    )
+    return [{"id": d.id, "name": d.name, "doc_type": d.doc_type} for d in docs]
 
 
-@router.get("/{doc_id}", response_model=SheetLoadResponse)
-def load_sheet(
+@router.get("/{doc_id}")
+def sheet_meta(
     doc_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(require_permissions("sheet:read")),
 ):
+    """返回表格元信息（含本地缓存记录数），不返回单元格数据。"""
     doc = _get_sheet_or_404(db, doc_id)
-    # 结构化焊接库：始终从 welding_records 重建工作簿（保证与大屏同源）
+    count = 0
     if doc.doc_type == "welding_db":
-        scope = get_data_scope(user)
-        if not scope.can_access_project(doc.project_id):
-            raise HTTPException(status_code=403, detail="无权访问该项目的数据")
-        records = (
-            db.query(WeldingRecord)
-            .filter(WeldingRecord.document_id == doc.id)
-            .order_by(WeldingRecord.row_index)
-            .all()
-        )
-        # 装置区级行权限过滤
-        if scope.has_zone_filter:
-            records = [r for r in records if scope.allows_zone(r.zone_code)]
-        # 加载全量焊接记录（WPS 式无限行：已用区域全部载入，非凭空造空行）
-        wb = build_workbook_from_records(records, doc.id, sheet_name=doc.name, limit=None)
-        row_versions = {
-            f"{r.pipeline_no}|{r.joint_no}": r.version for r in records
-        }
-        return SheetLoadResponse(
-            id=doc.id,
-            name=doc.name,
-            doc_type=doc.doc_type,
-            workbook_data=wb,
-            row_versions=row_versions,
-        )
-    return SheetLoadResponse(
-        id=doc.id, name=doc.name, doc_type=doc.doc_type, workbook_data=doc.workbook_data
-    )
+        count = db.query(WeldingRecord).filter(WeldingRecord.document_id == doc.id).count()
+    return {
+        "id": doc.id,
+        "name": doc.name,
+        "doc_type": doc.doc_type,
+        "record_count": count,
+        "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+    }
 
 
-@router.post("/{doc_id}/save")
-def save_sheet(
+@router.post("/{doc_id}/sync")
+def sync_sheet(
     doc_id: int,
-    payload: SheetSaveRequest,
+    payload: SyncRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_permissions("sheet:update")),
 ):
-    doc = _get_sheet_or_404(db, doc_id)
-    _assert_owner_or_perms(user, doc, ["sheet:update"])
+    """把腾讯文档表格同步进本地缓存（welding_records）。
 
-    wd = payload.workbook_data
-    if not isinstance(wd, dict) or "sheets" not in wd:
-        raise HTTPException(status_code=400, detail="workbook_data 格式不合法（缺少 sheets）")
-
-    # 结构化焊接库：解析 cellData -> welding_records（单一数据源）
-    if doc.doc_type == "welding_db":
-        records = parse_workbook_to_records(wd)
-        _upsert_welding_records(db, doc, records)
-        db.commit()
-        ds.notify_changed()  # 触发大屏 WebSocket 推送
-        return {
-            "ok": True,
-            "parsed_rows": len(records),
-            "updated_at": datetime.utcnow().isoformat(),
-        }
-
-    doc.workbook_data = wd
-    doc.updated_at = datetime.utcnow()
-    db.commit()
-    return {"ok": True, "updated_at": doc.updated_at.isoformat()}
-
-
-@router.post("/{doc_id}/save_rows")
-def save_rows(
-    doc_id: int,
-    payload: RowSaveRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_permissions("sheet:update")),
-):
-    """增量保存：仅 upsert 发生变化的行。
-
-    - 版本冲突检测：若某行服务端 version != 客户端提交的 version，则该行冲突，
-      不入库并返回在 conflicts 中（由前端提示用户刷新后重试）。
-    - 行权限：非 admin 且分配了装置区时，越权 zone 的行直接拒绝（conflicts reason=zone_denied）。
+    - 提供 rows（二维数组，首行表头）→ 直接解析入库。
+    - 提供 tencent_url → 走腾讯文档 API 拉取（fetch_sheet_values 待确认 API 类型后实现）。
     """
     doc = _get_sheet_or_404(db, doc_id)
     _assert_owner_or_perms(user, doc, ["sheet:update"])
     if doc.doc_type != "welding_db":
-        raise HTTPException(status_code=400, detail="仅结构化焊接库支持增量保存")
+        raise HTTPException(status_code=400, detail="仅结构化焊接库支持同步")
 
     scope = get_data_scope(user)
     if not scope.can_access_project(doc.project_id):
-        raise HTTPException(status_code=403, detail="无权修改该项目的数据")
+        raise HTTPException(status_code=403, detail="无权同步该项目的数据")
 
-    attr_names = [c[0] for c in COLUMN_DEFS]
-    existing = {
-        (r.pipeline_no, r.joint_no): r
-        for r in db.query(WeldingRecord).filter(WeldingRecord.document_id == doc.id).all()
-    }
-    max_row_index = max((r.row_index or 0) for r in existing.values()) if existing else 0
+    values: Optional[list[list]] = None
+    if payload.rows:
+        values = payload.rows
+    elif payload.tencent_url:
+        try:
+            config = tcfg.get_cfg(db)
+            if not config.get("access_token"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="尚未配置腾讯文档开发者凭证，请先由管理员在腾讯文档设置页保存凭证。",
+                )
+            values = td.TencentDocsClient(config).fetch_sheet_values(payload.tencent_url)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"腾讯文档拉取失败: {e}")
 
-    conflicts: list[dict] = []
-    updated = 0
-    new_index = max_row_index
-    versions_out: dict[str, int] = {}
+    if not values:
+        raise HTTPException(status_code=400, detail="请提供 rows（手动粘贴）或有效的 tencent_url")
 
-    for data in payload.rows:
-        pno = (data.get("pipeline_no") or "").strip()
-        jno = (data.get("joint_no") or "").strip()
-        if not pno and not jno:
-            continue
-        zone = (data.get("zone_code") or "").strip()
-        if not scope.allows_zone(zone):
-            conflicts.append(
-                {"pipeline_no": pno, "joint_no": jno, "reason": "zone_denied"}
-            )
-            continue
-
-        client_version = int(data.get("version", 0) or 0)
-        rec = existing.get((pno, jno))
-        if rec is None:
-            new_index += 1
-            rec = WeldingRecord(
-                document_id=doc.id,
-                owner_id=doc.owner_id,
-                project_id=doc.project_id,
-                department_id=doc.department_id,
-                source="sheet",
-                version=1,
-                row_index=new_index,
-            )
-            db.add(rec)
-            existing[(pno, jno)] = rec
-        elif rec.version != client_version:
-            conflicts.append(
-                {
-                    "pipeline_no": pno,
-                    "joint_no": jno,
-                    "reason": "version_conflict",
-                    "current_version": rec.version,
-                }
-            )
-            continue
-
-        for attr in attr_names:
-            if attr in data:
-                setattr(rec, attr, data[attr])
-        rec.version = (rec.version or 1) + 1
-        versions_out[f"{pno}|{jno}"] = rec.version
-        updated += 1
-
-    db.commit()
-    if updated:
-        ds.notify_changed()  # 触发大屏 WebSocket 推送
-    return {
-        "ok": True,
-        "updated": updated,
-        "conflicts": conflicts,
-        "versions": versions_out,
-    }
+    result = td.sync_document(db, doc, values)
+    result["updated_at"] = datetime.utcnow().isoformat()
+    return result

@@ -6,8 +6,4 @@ declare module '*.vue' {
   export default component
 }
 
-// Univer preset 语言包为纯 JS，无类型声明
-declare module '@univerjs/*/lib/locales/zh-CN' {
-  const locale: any
-  export default locale
-}
+// 腾讯文档接入，无需 Univer 语言包声明

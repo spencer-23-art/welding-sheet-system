@@ -4,17 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
-    "build": "vue-tsc -b && vite build",
+    "dev": "vite",
+    "build": "vite build",
     "preview": "vite preview --host"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
-    "@univerjs/preset-sheets-conditional-formatting": "^0.25.1",
-    "@univerjs/preset-sheets-core": "^0.25.1",
-    "@univerjs/preset-sheets-data-validation": "^0.25.1",
-    "@univerjs/preset-sheets-filter": "^0.25.1",
-    "@univerjs/presets": "^0.25.1",
     "axios": "^1.7.2",
     "element-plus": "^2.7.6",
     "pinia": "^2.2.0",

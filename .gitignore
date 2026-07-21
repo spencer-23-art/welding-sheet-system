@@ -8,11 +8,13 @@ venv/
 # Node
 node_modules/
 dist/
+*.tsbuildinfo
 
-# 构建/日志
+# 构建产物/压缩包
 *.log
 *.bak
 *.db.bak
+*.tar.gz
 .DS_Store
 
 # Vite 编译产物（由 vite.config.ts 生成）

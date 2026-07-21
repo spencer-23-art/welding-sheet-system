@@ -4,11 +4,11 @@
 """
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.dependencies import get_current_user, require_permissions
+from app.dependencies import require_permissions
 from app.models.document import Document
 from app.models.rbac import User
 from app.schemas.document import DocumentCreate, DocumentOut, DocumentRename

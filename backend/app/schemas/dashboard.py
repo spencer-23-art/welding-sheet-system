@@ -1,7 +1,7 @@
 """大屏统计接口响应模型（与 keshi/backend 大屏契约保持一致）。"""
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DashboardKpi(BaseModel):
@@ -16,6 +16,9 @@ class DashboardKpi(BaseModel):
     daily_welding_trend: List[dict]
     daily_ndt_trend: List[dict]
     once_ndt_pass_rate: float
+    full_ndt_joints: int
+    full_ndt_result_joints: int
+    full_ndt_completion_rate: float
 
 
 class PipelineStats(BaseModel):
@@ -43,6 +46,8 @@ class PipelineDetail(BaseModel):
     ndt_failed: int
     film_total: int
     film_approved: int
+    audit_issue: str = ""
+    audit_issues: List[dict] = Field(default_factory=list)
     last_welding_date: Optional[str] = None
     last_ndt_date: Optional[str] = None
 

@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Only backend/scripts/migrate_excel.py needs this package.
+openpyxl==3.1.2

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import hash_password
-from app.dependencies import get_current_user, require_permissions, user_permission_names
+from app.dependencies import require_permissions, user_permission_names
 from app.models.rbac import Role, User
 from app.schemas.user import UserCreate, UserOut, UserUpdate
 

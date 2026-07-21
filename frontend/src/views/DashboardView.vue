@@ -3,7 +3,7 @@
     <el-card>
       <h2 style="margin-top: 0">工作台</h2>
       <p style="color: #64748b">
-        当前阶段：用户系统与 RBAC 权限已完成。Univer 在线表格、多人协作、数据权限将在后续阶段上线。
+        当前阶段：用户系统与 RBAC 权限已完成。腾讯文档接入与数据同步已上线，编辑在腾讯文档内进行。
       </p>
       <el-descriptions border :column="2" v-if="auth.user">
         <el-descriptions-item label="用户名">{{ auth.user.username }}</el-descriptions-item>

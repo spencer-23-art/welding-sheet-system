@@ -46,9 +46,10 @@ def parse_date(val: Any) -> Optional[date]:
     if val is None:
         return None
     if isinstance(val, datetime):
-        return val.date()
+        parsed = val.date()
+        return None if parsed == date(1899, 12, 30) else parsed
     if isinstance(val, date):
-        return val
+        return None if val == date(1899, 12, 30) else val
     s = clean_str(val)
     if s == "":
         return None
@@ -59,17 +60,19 @@ def parse_date(val: Any) -> Optional[date]:
                 y, m, d = (int(parts[0]), int(parts[1]), int(parts[2]))
                 # 兼容 2026.3.4 之类
                 if 1 <= m <= 12 and 1 <= d <= 31:
-                    return date(y, m, d)
+                    parsed = date(y, m, d)
+                    return None if parsed == date(1899, 12, 30) else parsed
             except ValueError:
                 continue
     # 末次尝试：交给 datetime 自动解析
     try:
-        return datetime.fromisoformat(s[:10]).date()
+        parsed = datetime.fromisoformat(s[:10]).date()
+        return None if parsed == date(1899, 12, 30) else parsed
     except (ValueError, TypeError):
         return None
 
 
 def parse_ndt_ratio(val: Any) -> float:
-    """管线探伤比例：解析失败回退 5%。"""
+    """管线探伤比例：空值或解析失败时按 0% 处理。"""
     f = to_float(val)
-    return f if f is not None else 0.05
+    return f if f is not None else 0.0

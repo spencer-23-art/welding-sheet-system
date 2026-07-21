@@ -19,6 +19,9 @@
           <el-menu-item index="/admin/users" v-if="auth.hasPerm('page:admin')">
             <el-icon><User /></el-icon><span>用户管理</span>
           </el-menu-item>
+          <el-menu-item index="/tencent-settings" v-if="auth.hasPerm('page:admin')">
+            <el-icon><Setting /></el-icon><span>腾讯文档设置</span>
+          </el-menu-item>
         </el-menu>
       </aside>
       <main class="app-main">

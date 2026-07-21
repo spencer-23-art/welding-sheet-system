@@ -41,10 +41,6 @@ class UserBase(BaseModel):
     assigned_zones: Optional[List[str]] = None
 
 
-class UserRegister(UserBase):
-    password: str = Field(..., min_length=6, max_length=128)
-
-
 class UserCreate(UserBase):
     password: str = Field(..., min_length=6, max_length=128)
     role_names: List[str] = Field(default_factory=list)  # 管理员创建时指定角色
@@ -87,5 +83,5 @@ class UserOut(BaseModel):
     assigned_zones: Optional[List[str]] = None
     is_active: bool
     created_at: datetime
-    roles: List[RoleOut] = []
-    permissions: List[str] = []
+    roles: List[RoleOut] = Field(default_factory=list)
+    permissions: List[str] = Field(default_factory=list)

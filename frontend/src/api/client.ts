@@ -29,8 +29,23 @@ api.interceptors.request.use((config) => {
 })
 
 // 刷新锁，避免并发 401 同时刷新
-let refreshing = false
-let waiters: Array<(token: string | null) => void> = []
+let refreshPromise: Promise<string> | null = null
+
+function refreshAccessToken(refreshToken: string): Promise<string> {
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post('/api/refresh', { refresh_token: refreshToken })
+      .then((response) => {
+        const { access_token: access, refresh_token: refresh } = response.data
+        setTokens(access, refresh)
+        return access
+      })
+      .finally(() => {
+        refreshPromise = null
+      })
+  }
+  return refreshPromise
+}
 
 api.interceptors.response.use(
   (resp) => resp,
@@ -44,28 +59,15 @@ api.interceptors.response.use(
         return Promise.reject(error)
       }
       original._retry = true
-      if (!refreshing) {
-        refreshing = true
-        try {
-          const r = await axios.post('/api/refresh', { refresh_token: refresh })
-          setTokens(r.data.access_token, r.data.refresh_token)
-          refreshing = false
-          waiters.forEach((w) => w(r.data.access_token))
-          waiters = []
-        } catch {
-          refreshing = false
-          waiters = []
-          clearTokens()
-          window.location.href = '/login'
-          return Promise.reject(error)
-        }
-      }
-      const token = await new Promise<string | null>((resolve) =>
-        waiters.push(resolve)
-      )
-      if (token) {
+      try {
+        const token = await refreshAccessToken(refresh)
+        original.headers = original.headers || {}
         original.headers.Authorization = `Bearer ${token}`
         return api(original)
+      } catch {
+        clearTokens()
+        window.location.href = '/login'
+        return Promise.reject(error)
       }
     }
     const msg = error.response?.data?.detail || error.message || '请求失败'

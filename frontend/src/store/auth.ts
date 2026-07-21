@@ -18,11 +18,20 @@ export interface User {
   permissions: string[]
 }
 
+function loadStoredUser(): User | null {
+  const stored = localStorage.getItem('user')
+  if (!stored) return null
+  try {
+    return JSON.parse(stored) as User
+  } catch {
+    localStorage.removeItem('user')
+    return null
+  }
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('access_token'))
-  const user = ref<User | null>(
-    JSON.parse(localStorage.getItem('user') || 'null')
-  )
+  const user = ref<User | null>(loadStoredUser())
 
   const isLoggedIn = computed(() => !!token.value)
   const roles = computed(() => user.value?.roles.map((r) => r.name) || [])

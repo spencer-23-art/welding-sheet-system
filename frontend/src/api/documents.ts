@@ -48,25 +48,21 @@ export async function restoreDocument(id: number): Promise<DocumentItem> {
   return data
 }
 
-export async function loadSheet(id: number): Promise<{
+export async function getSheetMeta(id: number): Promise<{
   id: number
   name: string
   doc_type: string
-  workbook_data: Record<string, any> | null
-  row_versions: Record<string, number>
+  record_count: number
+  updated_at: string | null
 }> {
   const { data } = await api.get(`/sheets/${id}`)
   return data
 }
 
-export async function saveSheet(id: number, workbook_data: Record<string, any>): Promise<void> {
-  await api.post(`/sheets/${id}/save`, { workbook_data })
-}
-
-export async function saveSheetRows(
+export async function syncSheet(
   id: number,
-  rows: Array<Record<string, any>>,
-): Promise<{ ok: boolean; updated: number; conflicts: Array<Record<string, any>>; versions: Record<string, number> }> {
-  const { data } = await api.post(`/sheets/${id}/save_rows`, { rows })
+  payload: { tencent_url?: string; rows?: any[][] },
+): Promise<{ parsed_rows: number; updated: number; updated_at: string }> {
+  const { data } = await api.post(`/sheets/${id}/sync`, payload)
   return data
 }

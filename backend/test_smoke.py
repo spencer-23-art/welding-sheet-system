@@ -7,7 +7,6 @@ if os.path.exists("test.db"):
 
 from fastapi.testclient import TestClient
 from app.main import app
-from app.core.config import settings
 
 with TestClient(app) as client:
     # 1. 健康检查
@@ -99,37 +98,28 @@ with TestClient(app) as client:
     assert sheet["has_data"] is False
     print("[OK] 创建表格 焊口台账")
 
-    # 14. 保存表格 workbook_data
-    fake_wb = {
-        "sheetId": "sheet1",
-        "sheets": {"sheet1": {"id": "sheet1", "name": "Sheet1", "cellData": {}}},
-        "name": "焊口台账",
-    }
-    r = client.post(f"/api/sheets/{sheet['id']}/save", headers=headers,
-                    json={"workbook_data": fake_wb})
-    assert r.status_code == 200 and r.json()["ok"] is True, r.text
-    print("[OK] 保存表格 workbook_data")
-
-    # 15. 加载表格 -> 返回一致数据
+    # 14. 获取表格元信息（本地 Univer workbook 接口已下线）
     r = client.get(f"/api/sheets/{sheet['id']}", headers=headers)
     assert r.status_code == 200, r.text
-    assert r.json()["workbook_data"]["sheets"]["sheet1"]["name"] == "Sheet1"
-    print("[OK] 加载表格 数据一致")
+    assert r.json()["id"] == sheet["id"]
+    assert r.json()["name"] == "焊口台账"
+    assert r.json()["record_count"] == 0
+    print("[OK] 获取表格元信息")
 
-    # 16. 重命名表格
+    # 15. 重命名表格
     r = client.patch(f"/api/documents/{sheet['id']}", headers=headers,
                      json={"name": "焊口台账V2"})
     assert r.status_code == 200 and r.json()["name"] == "焊口台账V2"
     print("[OK] 重命名表格")
 
-    # 17. 软删除表格（普通列表不可见）
+    # 16. 软删除表格（普通列表不可见）
     r = client.delete(f"/api/documents/{sheet['id']}", headers=headers)
     assert r.status_code == 204, r.text
     r = client.get(f"/api/documents?parent_id={folder_b['id']}", headers=headers)
     assert all(d["id"] != sheet["id"] for d in r.json())
     print("[OK] 软删除表格")
 
-    # 18. 回收站可见 + 恢复
+    # 17. 回收站可见 + 恢复
     r = client.get(f"/api/documents?parent_id={folder_b['id']}&include_deleted=true",
                    headers=headers)
     assert any(d["id"] == sheet["id"] and d["is_deleted"] for d in r.json())
@@ -137,12 +127,12 @@ with TestClient(app) as client:
     assert r.status_code == 200 and r.json()["is_deleted"] is False
     print("[OK] 回收站可见并恢复表格")
 
-    # 19. 搜索
+    # 18. 搜索
     r = client.get("/api/documents?q=焊口", headers=headers)
     assert any("焊口" in d["name"] for d in r.json())
     print("[OK] 搜索文档")
 
-    # 20. 员工无 sheet:create 权限应被拦截（employee 仅有 read/update）
+    # 19. 员工无 sheet:create 权限应被拦截（employee 仅有 read/update）
     r = client.post("/api/documents", headers=zh,
                     json={"name": "不应创建", "is_folder": False})
     assert r.status_code == 403, "员工无 sheet:create 应被拦截"

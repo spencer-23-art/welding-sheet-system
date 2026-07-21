@@ -2,6 +2,7 @@
 
 幂等：已存在超级管理员则跳过。
 """
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -57,6 +58,56 @@ ROLE_DESC = {
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    # create_all only creates missing tables; keep existing deployments
+    # compatible when a Tencent-sheet field is added later.
+    inspector = inspect(engine)
+    if "welding_records" in inspector.get_table_names():
+        columns = {column["name"] for column in inspector.get_columns("welding_records")}
+        with engine.begin() as connection:
+            if "audit_issue" not in columns:
+                connection.execute(
+                    text("ALTER TABLE welding_records ADD COLUMN audit_issue TEXT")
+                )
+            if "source_row" not in columns:
+                connection.execute(
+                    text("ALTER TABLE welding_records ADD COLUMN source_row INTEGER")
+                )
+            if "heat_treatment_required" not in columns:
+                connection.execute(
+                    text("ALTER TABLE welding_records ADD COLUMN heat_treatment_required VARCHAR(20)")
+                )
+            if "heat_treatment_date" not in columns:
+                connection.execute(
+                    text("ALTER TABLE welding_records ADD COLUMN heat_treatment_date DATE")
+                )
+            for column_name in (
+                "heat_treatment_am",
+                "heat_treatment_an",
+                "heat_treatment_ao",
+                "heat_treatment_ap",
+            ):
+                if column_name not in columns:
+                    connection.execute(
+                        text(f"ALTER TABLE welding_records ADD COLUMN {column_name} TEXT")
+                    )
+            if connection.dialect.name == "postgresql":
+                # Business fields are not a stable record identity: the source
+                # may legally contain repeated pipeline/joint pairs.  The
+                # source worksheet row is unique only for Tencent-synced data.
+                connection.execute(
+                    text(
+                        "ALTER TABLE welding_records "
+                        "DROP CONSTRAINT IF EXISTS uq_wr_doc_pipeline_joint"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        "uq_wr_tencent_source_row "
+                        "ON welding_records (document_id, source_row) "
+                        "WHERE source = 'tencent_doc' AND source_row IS NOT NULL"
+                    )
+                )
 
 
 def seed(db: Session) -> None:
