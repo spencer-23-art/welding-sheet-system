@@ -21,6 +21,12 @@ dist/
 frontend/vite.config.js
 frontend/vite.config.d.ts
 
+# 已淘汰的在线编辑功能（保留本地，排除仓库）
+frontend/src/views/DocumentsView.vue
+frontend/src/views/TencentDocsView.vue
+backend/app/routers/documents.py
+backend/app/routers/sheets.py
+
 # 临时验证产物
 login.json
 f.json
