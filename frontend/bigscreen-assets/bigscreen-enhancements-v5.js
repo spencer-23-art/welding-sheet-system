@@ -44,7 +44,7 @@ const state = {
     heatTreatmentRequest: 0,
     heatTreatmentError: '',
     heatTreatmentRevision: 0,
-    heatTreatmentQueries: { complete: '', pending: '' },
+    heatTreatmentQuery: '',
     manualSyncing: false,
     manualSyncStatus: 'idle',
     manualSyncResetTimer: 0,
@@ -185,19 +185,12 @@ function syncSheetTitle() {
   function syncHomeTabLayout() {
     const shell = getScreenShell()
     const nav = shell?.querySelector('[data-quality-page-tabs]')
-    if (!nav) return
-
-    // The navigation remains in the identical full-width home-screen position
-    // on every tab.  Analysis pages are placed below this measured bar.
-    nav.classList.add('is-home-layout')
-    nav.classList.remove('is-analysis-layout')
-
     const pipelineLabel = Array.from(document.querySelectorAll('.kpi-container span')).find((node) =>
       node.textContent?.trim() === '管线总数量',
     )
     const kpiRegion = pipelineLabel?.closest('.kpi-card-item')?.parentElement?.parentElement
     const content = kpiRegion?.parentElement
-    if (!kpiRegion || !content) return
+    if (!nav || !kpiRegion || !content) return
 
     let spacer = content.querySelector('[data-quality-page-tabs-spacer]')
     if (!spacer) {
@@ -208,6 +201,8 @@ function syncSheetTitle() {
 
     const isHome = state.activePage === 'home'
     spacer.hidden = false
+    nav.classList.add('is-home-layout')
+    nav.classList.remove('is-analysis-layout')
     if (!isHome) return
 
     content.style.padding = '8px 20px 12px'
@@ -215,20 +210,6 @@ function syncSheetTitle() {
     kpiRegion.style.height = '78px'
     const bottomRow = content.lastElementChild
     if (bottomRow && bottomRow !== spacer) bottomRow.style.height = '196px'
-  }
-
-  function syncAnalysisPageLayout(page) {
-    const shell = getScreenShell()
-    const nav = shell?.querySelector('[data-quality-page-tabs]')
-    if (!shell || !nav || !page) return
-
-    // The tab bar is the shared visual anchor for the home screen and every
-    // analysis page.  Deriving the page offset from its measured bottom edge
-    // leaves a fixed breathing gap at every display scale, rather than relying
-    // on a page-specific hard-coded top value that can overlap the nav.
-    const navBottom = nav.offsetTop + nav.offsetHeight
-    page.style.top = `${navBottom + 14}px`
-    page.style.bottom = '14px'
   }
 
   function findPanel(title) {
@@ -373,7 +354,7 @@ function syncSheetTitle() {
 
     if (!clone) {
       clone = original.cloneNode(true)
-      ;['auditOriginal', 'auditIssueOriginal', 'unreviewedFilmOriginal', 'closureOriginal', 'qualityScanOriginal', 'heatTreatmentOriginal'].forEach((key) => {
+      ;['auditOriginal', 'auditIssueOriginal', 'unreviewedFilmOriginal', 'closureOriginal', 'qualityScanOriginal'].forEach((key) => {
         delete clone.dataset[key]
       })
       clone.dataset.continuousClone = 'true'
@@ -639,8 +620,10 @@ function syncSheetTitle() {
   function buildAnalysisHeader(title, subtitle) {
     const header = createElement('div', 'quality-analysis-header')
     const text = createElement('div', 'quality-analysis-heading')
-    text.appendChild(createElement('h2', '', title))
-    if (subtitle) text.appendChild(createElement('p', '', subtitle))
+    text.append(
+      createElement('h2', '', title),
+      createElement('p', '', subtitle),
+    )
     const tag = createElement('span', 'quality-live-tag', '数据随大屏实时刷新')
     header.append(text, tag)
     return header
@@ -841,7 +824,7 @@ function syncSheetTitle() {
   function buildHeatTreatmentScroller(joints, card, status) {
     const scroller = createElement('div', 'heat-treatment-scroller')
     const header = createElement('div', 'heat-treatment-row is-header')
-    ;['管线号', '焊口号', '日期', '焊缝硬度值', '母材硬度值', '热影响区硬度值', '热处理操作人'].forEach((label) => {
+    ;['管线号', '焊口号', 'AL 日期', 'AM', 'AN', 'AO', 'AP'].forEach((label) => {
       header.appendChild(createElement('span', '', label))
     })
     const viewport = createElement('div', 'heat-treatment-viewport')
@@ -890,32 +873,6 @@ function syncSheetTitle() {
       activeClass: 'is-heat-treatment-scrolling',
     }))
     return scroller
-  }
-
-  function buildHeatTreatmentSearch(card, status) {
-    const search = createElement('label', 'heat-treatment-search')
-    search.dataset.heatTreatmentSearch = status
-    search.setAttribute('aria-label', status === 'complete' ? '搜索已热处理焊口' : '搜索未热处理焊口')
-    const input = document.createElement('input')
-    input.type = 'search'
-    input.placeholder = '搜索管线号 / 焊口号'
-    input.value = state.heatTreatmentQueries[status] || ''
-    input.setAttribute('aria-label', status === 'complete' ? '搜索已热处理焊口的管线号或焊口号' : '搜索未热处理焊口的管线号或焊口号')
-    input.addEventListener('input', () => {
-      const cursor = input.selectionStart
-      state.heatTreatmentQueries[status] = input.value
-      state.qualityRenderKey = ''
-      renderQualityPage()
-      requestAnimationFrame(() => {
-        const nextInput = card.ownerDocument.querySelector(`[data-heat-treatment-search="${status}"] input`)
-        if (!nextInput) return
-        nextInput.focus({ preventScroll: true })
-        const position = Math.min(Number(cursor || 0), nextInput.value.length)
-        nextInput.setSelectionRange(position, position)
-      })
-    })
-    search.appendChild(input)
-    return search
   }
 
   function appendQualityPage(page, title, subtitle, kpis, body) {
@@ -1196,18 +1153,15 @@ function syncSheetTitle() {
   function renderHeatTreatmentPage(page, data) {
     const summary = data?.summary || {}
     const joints = Array.isArray(data?.joints) ? data.joints : []
-    const matchesHeatTreatmentQuery = (item, query) => !query
-      || normalize(item.pipeline_no).includes(query)
-      || normalize(item.joint_no).includes(query)
-    const allCompletedJoints = joints.filter((item) => item.heat_treatment_completed)
-    const allPendingJoints = joints.filter((item) => !item.heat_treatment_completed)
-    const completeQuery = normalize(state.heatTreatmentQueries.complete)
-    const pendingQuery = normalize(state.heatTreatmentQueries.pending)
-    const completedJoints = allCompletedJoints.filter((item) => matchesHeatTreatmentQuery(item, completeQuery))
-    const pendingJoints = allPendingJoints.filter((item) => matchesHeatTreatmentQuery(item, pendingQuery))
+    const query = normalize(state.heatTreatmentQuery)
+    const visibleJoints = query
+      ? joints.filter((item) => normalize(item.pipeline_no).includes(query) || normalize(item.joint_no).includes(query))
+      : joints
+    const completedJoints = visibleJoints.filter((item) => item.heat_treatment_completed)
+    const pendingJoints = visibleJoints.filter((item) => !item.heat_treatment_completed)
     const header = buildAnalysisHeader(
       '焊接热处理分析',
-      '',
+      '按 AK 列“是”识别需热处理管线；AL 列有效日期表示已完成（1899-12-30 视为空）',
     )
     const kpiGrid = createElement('div', 'heat-treatment-kpi-grid')
     kpiGrid.append(
@@ -1220,26 +1174,45 @@ function syncSheetTitle() {
     const overviewText = createElement('div', 'heat-treatment-list-overview-text')
     overviewText.append(
       createElement('strong', '', '热处理清单明细'),
-      createElement('span', '', `共 ${joints.length} 道需热处理焊口`),
+      createElement('span', '', query ? `检索 ${visibleJoints.length} / ${joints.length} 道` : `共 ${joints.length} 道需热处理焊口`),
     )
-    listOverview.appendChild(overviewText)
+    const search = createElement('label', 'heat-treatment-search')
+    search.setAttribute('aria-label', '搜索热处理焊口')
+    const input = document.createElement('input')
+    input.type = 'search'
+    input.placeholder = '搜索管线号 / 焊口号'
+    input.value = state.heatTreatmentQuery
+    input.setAttribute('aria-label', '搜索管线号或焊口号')
+    input.addEventListener('input', () => {
+      const cursor = input.selectionStart
+      state.heatTreatmentQuery = input.value
+      state.qualityRenderKey = ''
+      renderQualityPage()
+      requestAnimationFrame(() => {
+        const nextInput = page.querySelector('.heat-treatment-search input')
+        if (!nextInput) return
+        nextInput.focus({ preventScroll: true })
+        const position = Math.min(Number(cursor || 0), nextInput.value.length)
+        nextInput.setSelectionRange(position, position)
+      })
+    })
+    search.appendChild(input)
+    listOverview.append(overviewText, search)
 
     const listGrid = createElement('div', 'heat-treatment-lists')
     const completedCard = buildCard('已热处理焊口', `共 ${completedJoints.length} 道`)
     completedCard.card.classList.add('heat-treatment-list-card', 'heat-treatment-completed-card')
-    completedCard.header.appendChild(buildHeatTreatmentSearch(completedCard.card, 'complete'))
     if (completedJoints.length) {
       completedCard.body.appendChild(buildHeatTreatmentScroller(completedJoints, completedCard.card, 'complete'))
     } else {
-      completedCard.body.appendChild(createElement('div', 'heat-treatment-empty', completeQuery ? '未找到匹配的已热处理焊口' : '暂无已热处理焊口'))
+      completedCard.body.appendChild(createElement('div', 'heat-treatment-empty', query ? '未找到匹配的已热处理焊口' : '暂无已热处理焊口'))
     }
     const pendingCard = buildCard('未热处理焊口', `共 ${pendingJoints.length} 道`)
     pendingCard.card.classList.add('heat-treatment-list-card', 'heat-treatment-pending-card')
-    pendingCard.header.appendChild(buildHeatTreatmentSearch(pendingCard.card, 'pending'))
     if (pendingJoints.length) {
       pendingCard.body.appendChild(buildHeatTreatmentScroller(pendingJoints, pendingCard.card, 'pending'))
     } else {
-      pendingCard.body.appendChild(createElement('div', 'heat-treatment-empty', pendingQuery ? '未找到匹配的未热处理焊口' : '暂无未热处理焊口'))
+      pendingCard.body.appendChild(createElement('div', 'heat-treatment-empty', query ? '未找到匹配的未热处理焊口' : '暂无未热处理焊口'))
     }
     listGrid.append(completedCard.card, pendingCard.card)
     page.replaceChildren(header, kpiGrid, listOverview, listGrid)
@@ -1255,7 +1228,6 @@ function syncSheetTitle() {
     if (homeContent) homeContent.style.visibility = isHome ? '' : 'hidden'
     ensurePageTabs()
     syncHomeTabLayout()
-    syncAnalysisPageLayout(page)
     if (isHome) return
 
     const isPipeline = state.activePage === 'pipeline'
@@ -1280,7 +1252,7 @@ function syncSheetTitle() {
     }
 
     if (isHeatTreatment) {
-      const heatKey = `heat-treatment:${state.heatTreatmentRevision}:${state.heatTreatmentPending}:${state.heatTreatmentError}:${state.heatTreatmentQueries.complete}:${state.heatTreatmentQueries.pending}`
+      const heatKey = `heat-treatment:${state.heatTreatmentRevision}:${state.heatTreatmentPending}:${state.heatTreatmentError}:${state.heatTreatmentQuery}`
       if (state.qualityRenderKey === heatKey) return
       state.qualityRenderKey = heatKey
       if (!state.heatTreatmentData) {
@@ -1524,7 +1496,7 @@ function syncSheetTitle() {
       .quality-layout { display: grid; min-height: 0; flex: 1 1 auto; gap: 8px; }
       .quality-layout-welder { grid-template-rows: minmax(168px, .72fr) minmax(228px, 1.28fr); }
       .quality-layout-audit { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .quality-analysis-page.is-audit-dashboard { gap: 5px; }
+      .quality-analysis-page.is-audit-dashboard { top: 148px; bottom: 12px; gap: 5px; }
       .is-audit-dashboard .quality-analysis-header { min-height: 30px; padding: 0 8px 4px 12px; }
       .is-audit-dashboard .quality-analysis-heading h2 { font-size: 17px; }
       .is-audit-dashboard .quality-analysis-heading p { margin-top: 2px; font-size: 8px; }

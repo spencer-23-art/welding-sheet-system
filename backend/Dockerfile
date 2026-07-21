@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 先装依赖（利用层缓存，使用阿里云 pip 源加速）
+# 先装依赖（利用层缓存，阿里云 pip 源）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     -i https://mirrors.aliyun.com/pypi/simple/ \

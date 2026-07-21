@@ -8,24 +8,16 @@ venv/
 # Node
 node_modules/
 dist/
-*.tsbuildinfo
 
-# 构建产物/压缩包
+# 构建/日志
 *.log
 *.bak
 *.db.bak
-*.tar.gz
 .DS_Store
 
 # Vite 编译产物（由 vite.config.ts 生成）
 frontend/vite.config.js
 frontend/vite.config.d.ts
-
-# 已淘汰的在线编辑功能（保留本地，排除仓库）
-frontend/src/views/DocumentsView.vue
-frontend/src/views/TencentDocsView.vue
-backend/app/routers/documents.py
-backend/app/routers/sheets.py
 
 # 临时验证产物
 login.json

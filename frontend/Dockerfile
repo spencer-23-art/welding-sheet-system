@@ -1,10 +1,8 @@
-# ---- 前端多阶段构建 ----
+# ---- 前端多阶段构建（npm 阿里云镜像）----
 FROM node:20-alpine AS build
 WORKDIR /app
-# 使用阿里云 npm 源加速
-RUN npm config set registry https://registry.npmmirror.com
 COPY package*.json ./
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com && npm ci
 COPY . .
 RUN npm run build
 
