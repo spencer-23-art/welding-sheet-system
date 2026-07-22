@@ -44,7 +44,7 @@ const state = {
     heatTreatmentRequest: 0,
     heatTreatmentError: '',
     heatTreatmentRevision: 0,
-    heatTreatmentQuery: '',
+    heatTreatmentQueries: { complete: '', pending: '' },
     manualSyncing: false,
     manualSyncStatus: 'idle',
     manualSyncResetTimer: 0,
@@ -185,12 +185,20 @@ function syncSheetTitle() {
   function syncHomeTabLayout() {
     const shell = getScreenShell()
     const nav = shell?.querySelector('[data-quality-page-tabs]')
+    if (!nav) return
+
+    // Keep the tab bar in the exact same full-width position on the home
+    // screen and every analysis page.  Analysis content is then anchored below
+    // the measured bottom edge of this shared bar.
+    nav.classList.add('is-home-layout')
+    nav.classList.remove('is-analysis-layout')
+
     const pipelineLabel = Array.from(document.querySelectorAll('.kpi-container span')).find((node) =>
       node.textContent?.trim() === '管线总数量',
     )
     const kpiRegion = pipelineLabel?.closest('.kpi-card-item')?.parentElement?.parentElement
     const content = kpiRegion?.parentElement
-    if (!nav || !kpiRegion || !content) return
+    if (!kpiRegion || !content) return
 
     let spacer = content.querySelector('[data-quality-page-tabs-spacer]')
     if (!spacer) {
@@ -201,8 +209,6 @@ function syncSheetTitle() {
 
     const isHome = state.activePage === 'home'
     spacer.hidden = false
-    nav.classList.add('is-home-layout')
-    nav.classList.remove('is-analysis-layout')
     if (!isHome) return
 
     content.style.padding = '8px 20px 12px'
@@ -210,6 +216,20 @@ function syncSheetTitle() {
     kpiRegion.style.height = '78px'
     const bottomRow = content.lastElementChild
     if (bottomRow && bottomRow !== spacer) bottomRow.style.height = '196px'
+  }
+
+  function syncAnalysisPageLayout(page) {
+    const shell = getScreenShell()
+    const nav = shell?.querySelector('[data-quality-page-tabs]')
+    if (!shell || !nav || !page) return
+
+    // Anchor every analysis page to the exact point where the overview's KPI
+    // region begins. This preserves the same nav/content relationship as 首页总览.
+    const navBottom = nav.offsetTop + nav.offsetHeight
+    const overviewKpiRegion = shell.querySelector('.kpi-container')?.parentElement
+    const overviewContentTop = overviewKpiRegion?.offsetTop
+    page.style.top = `${Math.max(navBottom + 14, overviewContentTop || 0)}px`
+    page.style.bottom = '14px'
   }
 
   function findPanel(title) {
@@ -354,7 +374,7 @@ function syncSheetTitle() {
 
     if (!clone) {
       clone = original.cloneNode(true)
-      ;['auditOriginal', 'auditIssueOriginal', 'unreviewedFilmOriginal', 'closureOriginal', 'qualityScanOriginal'].forEach((key) => {
+      ;['auditOriginal', 'auditIssueOriginal', 'unreviewedFilmOriginal', 'closureOriginal', 'qualityScanOriginal', 'heatTreatmentOriginal'].forEach((key) => {
         delete clone.dataset[key]
       })
       clone.dataset.continuousClone = 'true'
@@ -553,6 +573,7 @@ function syncSheetTitle() {
 
   const number = (value) => Number(value || 0)
   const percent = (value) => `${(number(value) * 100).toFixed(1)}%`
+  const samePayload = (left, right) => JSON.stringify(left) === JSON.stringify(right)
 
   function getScreenShell() {
     return document.querySelector('.screen-wrapper')
@@ -620,10 +641,8 @@ function syncSheetTitle() {
   function buildAnalysisHeader(title, subtitle) {
     const header = createElement('div', 'quality-analysis-header')
     const text = createElement('div', 'quality-analysis-heading')
-    text.append(
-      createElement('h2', '', title),
-      createElement('p', '', subtitle),
-    )
+    text.appendChild(createElement('h2', '', title))
+    if (subtitle) text.appendChild(createElement('p', '', subtitle))
     const tag = createElement('span', 'quality-live-tag', '数据随大屏实时刷新')
     header.append(text, tag)
     return header
@@ -824,7 +843,7 @@ function syncSheetTitle() {
   function buildHeatTreatmentScroller(joints, card, status) {
     const scroller = createElement('div', 'heat-treatment-scroller')
     const header = createElement('div', 'heat-treatment-row is-header')
-    ;['管线号', '焊口号', 'AL 日期', 'AM', 'AN', 'AO', 'AP'].forEach((label) => {
+    ;['管线号', '焊口号', '日期', '焊缝硬度值', '母材硬度值', '热影响区硬度值', '热处理操作人'].forEach((label) => {
       header.appendChild(createElement('span', '', label))
     })
     const viewport = createElement('div', 'heat-treatment-viewport')
@@ -873,6 +892,32 @@ function syncSheetTitle() {
       activeClass: 'is-heat-treatment-scrolling',
     }))
     return scroller
+  }
+
+  function buildHeatTreatmentSearch(card, status) {
+    const search = createElement('label', 'heat-treatment-search')
+    search.dataset.heatTreatmentSearch = status
+    search.setAttribute('aria-label', status === 'complete' ? '搜索已热处理焊口' : '搜索未热处理焊口')
+    const input = document.createElement('input')
+    input.type = 'search'
+    input.placeholder = '搜索管线号 / 焊口号'
+    input.value = state.heatTreatmentQueries[status] || ''
+    input.setAttribute('aria-label', status === 'complete' ? '搜索已热处理焊口的管线号或焊口号' : '搜索未热处理焊口的管线号或焊口号')
+    input.addEventListener('input', () => {
+      const cursor = input.selectionStart
+      state.heatTreatmentQueries[status] = input.value
+      state.qualityRenderKey = ''
+      renderQualityPage()
+      requestAnimationFrame(() => {
+        const nextInput = card.ownerDocument.querySelector(`[data-heat-treatment-search="${status}"] input`)
+        if (!nextInput) return
+        nextInput.focus({ preventScroll: true })
+        const position = Math.min(Number(cursor || 0), nextInput.value.length)
+        nextInput.setSelectionRange(position, position)
+      })
+    })
+    search.appendChild(input)
+    return search
   }
 
   function appendQualityPage(page, title, subtitle, kpis, body) {
@@ -933,7 +978,7 @@ function syncSheetTitle() {
       buildQualityScanCard('一次探伤风险焊工', '有效一次探伤 ≥ 10 道；一次合格率 < 80%', lowPassWelders, 'danger', '暂无满足 10 道有效探伤且合格率低于 80% 的焊工'),
     )
     body.append(charts, detail.card)
-    appendQualityPage(page, '焊工质量分析', 'H 列焊工号 × X 列一次探伤结果；仅统计“合格 / 不合格”', [
+    appendQualityPage(page, '焊工质量分析', '', [
       ['有效一次探伤', `${number(summary.inspected_joints)} 道`, 'X 列空白不计入'],
       ['一次探伤合格', `${number(summary.passed_joints)} 道`, '参与合格率计算', 'is-success'],
       ['一次探伤不合格', `${number(summary.failed_joints)} 道`, '需持续跟踪', 'is-danger'],
@@ -1102,7 +1147,7 @@ function syncSheetTitle() {
       }),
     )
     page.replaceChildren(
-      buildAnalysisHeader('焊接进度 · 日完成态势', 'R 列焊接日期与 V 列探伤日期独立选取；下方趋势图实时联动对应日期'),
+      buildAnalysisHeader('焊接进度 · 日完成态势', ''),
       body,
     )
   }
@@ -1141,7 +1186,7 @@ function syncSheetTitle() {
       unreviewedCard.body.appendChild(createElement('div', 'quality-empty', '暂无未审核底片'))
     }
     body.append(issueCard.card, closure.card, unreviewedCard.card)
-    appendQualityPage(page, '无损检测与审核分析', '按 X、Y、AA 探伤结果识别未闭环焊口，并集中展示四方底片审核风险', [
+    appendQualityPage(page, '无损检测与审核分析', '', [
       ['一次探伤不合格', `${number(repair.first_failures)} 道`, 'X 列为“不合格”', 'is-danger'],
       ['返修复探合格', `${number(repair.repaired_after_failure)} 道`, '二次或三次探伤合格', 'is-success'],
       ['待处理 / 未闭环', `${number(repair.unresolved_failures)} 道`, '需要重点跟踪', 'is-warning'],
@@ -1153,15 +1198,18 @@ function syncSheetTitle() {
   function renderHeatTreatmentPage(page, data) {
     const summary = data?.summary || {}
     const joints = Array.isArray(data?.joints) ? data.joints : []
-    const query = normalize(state.heatTreatmentQuery)
-    const visibleJoints = query
-      ? joints.filter((item) => normalize(item.pipeline_no).includes(query) || normalize(item.joint_no).includes(query))
-      : joints
-    const completedJoints = visibleJoints.filter((item) => item.heat_treatment_completed)
-    const pendingJoints = visibleJoints.filter((item) => !item.heat_treatment_completed)
+    const matchesHeatTreatmentQuery = (item, query) => !query
+      || normalize(item.pipeline_no).includes(query)
+      || normalize(item.joint_no).includes(query)
+    const allCompletedJoints = joints.filter((item) => item.heat_treatment_completed)
+    const allPendingJoints = joints.filter((item) => !item.heat_treatment_completed)
+    const completeQuery = normalize(state.heatTreatmentQueries.complete)
+    const pendingQuery = normalize(state.heatTreatmentQueries.pending)
+    const completedJoints = allCompletedJoints.filter((item) => matchesHeatTreatmentQuery(item, completeQuery))
+    const pendingJoints = allPendingJoints.filter((item) => matchesHeatTreatmentQuery(item, pendingQuery))
     const header = buildAnalysisHeader(
       '焊接热处理分析',
-      '按 AK 列“是”识别需热处理管线；AL 列有效日期表示已完成（1899-12-30 视为空）',
+      '',
     )
     const kpiGrid = createElement('div', 'heat-treatment-kpi-grid')
     kpiGrid.append(
@@ -1174,45 +1222,26 @@ function syncSheetTitle() {
     const overviewText = createElement('div', 'heat-treatment-list-overview-text')
     overviewText.append(
       createElement('strong', '', '热处理清单明细'),
-      createElement('span', '', query ? `检索 ${visibleJoints.length} / ${joints.length} 道` : `共 ${joints.length} 道需热处理焊口`),
+      createElement('span', '', `共 ${joints.length} 道需热处理焊口`),
     )
-    const search = createElement('label', 'heat-treatment-search')
-    search.setAttribute('aria-label', '搜索热处理焊口')
-    const input = document.createElement('input')
-    input.type = 'search'
-    input.placeholder = '搜索管线号 / 焊口号'
-    input.value = state.heatTreatmentQuery
-    input.setAttribute('aria-label', '搜索管线号或焊口号')
-    input.addEventListener('input', () => {
-      const cursor = input.selectionStart
-      state.heatTreatmentQuery = input.value
-      state.qualityRenderKey = ''
-      renderQualityPage()
-      requestAnimationFrame(() => {
-        const nextInput = page.querySelector('.heat-treatment-search input')
-        if (!nextInput) return
-        nextInput.focus({ preventScroll: true })
-        const position = Math.min(Number(cursor || 0), nextInput.value.length)
-        nextInput.setSelectionRange(position, position)
-      })
-    })
-    search.appendChild(input)
-    listOverview.append(overviewText, search)
+    listOverview.appendChild(overviewText)
 
     const listGrid = createElement('div', 'heat-treatment-lists')
     const completedCard = buildCard('已热处理焊口', `共 ${completedJoints.length} 道`)
     completedCard.card.classList.add('heat-treatment-list-card', 'heat-treatment-completed-card')
+    completedCard.header.appendChild(buildHeatTreatmentSearch(completedCard.card, 'complete'))
     if (completedJoints.length) {
       completedCard.body.appendChild(buildHeatTreatmentScroller(completedJoints, completedCard.card, 'complete'))
     } else {
-      completedCard.body.appendChild(createElement('div', 'heat-treatment-empty', query ? '未找到匹配的已热处理焊口' : '暂无已热处理焊口'))
+      completedCard.body.appendChild(createElement('div', 'heat-treatment-empty', completeQuery ? '未找到匹配的已热处理焊口' : '暂无已热处理焊口'))
     }
     const pendingCard = buildCard('未热处理焊口', `共 ${pendingJoints.length} 道`)
     pendingCard.card.classList.add('heat-treatment-list-card', 'heat-treatment-pending-card')
+    pendingCard.header.appendChild(buildHeatTreatmentSearch(pendingCard.card, 'pending'))
     if (pendingJoints.length) {
       pendingCard.body.appendChild(buildHeatTreatmentScroller(pendingJoints, pendingCard.card, 'pending'))
     } else {
-      pendingCard.body.appendChild(createElement('div', 'heat-treatment-empty', query ? '未找到匹配的未热处理焊口' : '暂无未热处理焊口'))
+      pendingCard.body.appendChild(createElement('div', 'heat-treatment-empty', pendingQuery ? '未找到匹配的未热处理焊口' : '暂无未热处理焊口'))
     }
     listGrid.append(completedCard.card, pendingCard.card)
     page.replaceChildren(header, kpiGrid, listOverview, listGrid)
@@ -1228,6 +1257,7 @@ function syncSheetTitle() {
     if (homeContent) homeContent.style.visibility = isHome ? '' : 'hidden'
     ensurePageTabs()
     syncHomeTabLayout()
+    syncAnalysisPageLayout(page)
     if (isHome) return
 
     const isPipeline = state.activePage === 'pipeline'
@@ -1237,7 +1267,7 @@ function syncSheetTitle() {
     page.classList.toggle('is-audit-dashboard', isAudit)
     page.classList.toggle('is-heat-treatment-dashboard', isHeatTreatment)
     if (isPipeline) {
-      const pipelineKey = `pipeline:${state.pipelineDailyRevision}:${state.pipelineDailyPending}:${state.pipelineDailyError}`
+      const pipelineKey = `pipeline:${state.pipelineDailyRevision}:${state.pipelineDailyData ? '' : state.pipelineDailyError}`
       if (state.qualityRenderKey === pipelineKey) return
       state.qualityRenderKey = pipelineKey
       if (!state.pipelineDailyData) {
@@ -1252,7 +1282,7 @@ function syncSheetTitle() {
     }
 
     if (isHeatTreatment) {
-      const heatKey = `heat-treatment:${state.heatTreatmentRevision}:${state.heatTreatmentPending}:${state.heatTreatmentError}:${state.heatTreatmentQuery}`
+      const heatKey = `heat-treatment:${state.heatTreatmentRevision}:${state.heatTreatmentData ? '' : state.heatTreatmentError}:${state.heatTreatmentQueries.complete}:${state.heatTreatmentQueries.pending}`
       if (state.qualityRenderKey === heatKey) return
       state.qualityRenderKey = heatKey
       if (!state.heatTreatmentData) {
@@ -1266,7 +1296,7 @@ function syncSheetTitle() {
       return
     }
 
-    const key = `${state.activePage}:${state.qualityRevision}:${state.qualityPending}:${state.qualityError}`
+    const key = `${state.activePage}:${state.qualityRevision}:${state.qualityData ? '' : state.qualityError}`
     if (state.qualityRenderKey === key) return
     state.qualityRenderKey = key
     if (!state.qualityData) {
@@ -1283,10 +1313,14 @@ function syncSheetTitle() {
   function requestQualityData() {
     const now = Date.now()
     if (state.qualityPending || (state.qualityData && now - state.qualityCheckedAt < 15000)) return
+    const hadData = Boolean(state.qualityData)
+    let dataChanged = false
     state.qualityPending = true
     state.qualityError = ''
-    state.qualityRenderKey = ''
-    renderQualityPage()
+    if (!hadData) {
+      state.qualityRenderKey = ''
+      renderQualityPage()
+    }
     const requestId = ++state.qualityRequest
     fetch('/api/quality-analysis')
       .then((response) => {
@@ -1295,9 +1329,10 @@ function syncSheetTitle() {
       })
       .then((data) => {
         if (requestId !== state.qualityRequest) return
+        dataChanged = !samePayload(state.qualityData, data)
         state.qualityData = data
         state.qualityCheckedAt = Date.now()
-        state.qualityRevision += 1
+        if (dataChanged) state.qualityRevision += 1
       })
       .catch(() => {
         if (requestId !== state.qualityRequest) return
@@ -1307,8 +1342,10 @@ function syncSheetTitle() {
       .finally(() => {
         if (requestId !== state.qualityRequest) return
         state.qualityPending = false
-        state.qualityRenderKey = ''
-        renderQualityPage()
+        if (!hadData || dataChanged) {
+          state.qualityRenderKey = ''
+          renderQualityPage()
+        }
       })
   }
 
@@ -1316,10 +1353,14 @@ function syncSheetTitle() {
     const now = Date.now()
     if (state.heatTreatmentPending && !force) return
     if (!force && state.heatTreatmentData && now - state.heatTreatmentCheckedAt < 15000) return
+    const hadData = Boolean(state.heatTreatmentData)
+    let dataChanged = false
     state.heatTreatmentPending = true
     state.heatTreatmentError = ''
-    state.qualityRenderKey = ''
-    renderQualityPage()
+    if (!hadData) {
+      state.qualityRenderKey = ''
+      renderQualityPage()
+    }
     const requestId = ++state.heatTreatmentRequest
     fetch('/api/heat-treatment-analysis')
       .then((response) => {
@@ -1328,9 +1369,10 @@ function syncSheetTitle() {
       })
       .then((data) => {
         if (requestId !== state.heatTreatmentRequest) return
+        dataChanged = !samePayload(state.heatTreatmentData, data)
         state.heatTreatmentData = data
         state.heatTreatmentCheckedAt = Date.now()
-        state.heatTreatmentRevision += 1
+        if (dataChanged) state.heatTreatmentRevision += 1
       })
       .catch(() => {
         if (requestId !== state.heatTreatmentRequest) return
@@ -1340,8 +1382,10 @@ function syncSheetTitle() {
       .finally(() => {
         if (requestId !== state.heatTreatmentRequest) return
         state.heatTreatmentPending = false
-        state.qualityRenderKey = ''
-        renderQualityPage()
+        if (!hadData || dataChanged) {
+          state.qualityRenderKey = ''
+          renderQualityPage()
+        }
       })
   }
 
@@ -1349,10 +1393,14 @@ function syncSheetTitle() {
     const now = Date.now()
     if (state.pipelineDailyPending && !force) return
     if (!force && state.pipelineDailyData && now - state.pipelineDailyCheckedAt < 15000) return
+    const hadData = Boolean(state.pipelineDailyData)
+    let dataChanged = false
     state.pipelineDailyPending = true
     state.pipelineDailyError = ''
-    state.qualityRenderKey = ''
-    renderQualityPage()
+    if (!hadData) {
+      state.qualityRenderKey = ''
+      renderQualityPage()
+    }
     const requestId = ++state.pipelineDailyRequest
     const params = new URLSearchParams()
     if (state.pipelineDailyDates.welding) params.set('weld_date', state.pipelineDailyDates.welding)
@@ -1365,11 +1413,12 @@ function syncSheetTitle() {
       })
       .then((data) => {
         if (requestId !== state.pipelineDailyRequest) return
+        dataChanged = !samePayload(state.pipelineDailyData, data)
         state.pipelineDailyData = data
         state.pipelineDailyDates.welding = data?.welding?.selected_date || state.pipelineDailyDates.welding
         state.pipelineDailyDates.ndt = data?.ndt?.selected_date || state.pipelineDailyDates.ndt
         state.pipelineDailyCheckedAt = Date.now()
-        state.pipelineDailyRevision += 1
+        if (dataChanged) state.pipelineDailyRevision += 1
       })
       .catch(() => {
         if (requestId !== state.pipelineDailyRequest) return
@@ -1379,8 +1428,10 @@ function syncSheetTitle() {
       .finally(() => {
         if (requestId !== state.pipelineDailyRequest) return
         state.pipelineDailyPending = false
-        state.qualityRenderKey = ''
-        renderQualityPage()
+        if (!hadData || dataChanged) {
+          state.qualityRenderKey = ''
+          renderQualityPage()
+        }
       })
   }
 
@@ -1496,7 +1547,7 @@ function syncSheetTitle() {
       .quality-layout { display: grid; min-height: 0; flex: 1 1 auto; gap: 8px; }
       .quality-layout-welder { grid-template-rows: minmax(168px, .72fr) minmax(228px, 1.28fr); }
       .quality-layout-audit { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .quality-analysis-page.is-audit-dashboard { top: 148px; bottom: 12px; gap: 5px; }
+      .quality-analysis-page.is-audit-dashboard { gap: 5px; }
       .is-audit-dashboard .quality-analysis-header { min-height: 30px; padding: 0 8px 4px 12px; }
       .is-audit-dashboard .quality-analysis-heading h2 { font-size: 17px; }
       .is-audit-dashboard .quality-analysis-heading p { margin-top: 2px; font-size: 8px; }

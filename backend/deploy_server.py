@@ -30,16 +30,14 @@ DEPLOY_PATHS = (
     "backend/requirements.txt",
     "backend/requirements-migration.txt",
     "backend/app",
+    "frontend/50x.html",
     "frontend/Dockerfile",
+    "frontend/favicon.svg",
+    "frontend/icons.svg",
+    "frontend/index.html",
+    "frontend/bigscreen-index-v5.html",
     "frontend/nginx.conf",
-    "frontend/package.json",
-    "frontend/package-lock.json",
-    "frontend/tsconfig.json",
-    "frontend/tsconfig.node.json",
-    "frontend/vite.config.ts",
-    "frontend/src",
-    "frontend/bigscreen-assets",
-    "docs/code-audit-2026-07-19.md",
+    "frontend/assets",
 )
 
 
@@ -87,11 +85,6 @@ def run(client: paramiko.SSHClient, command: str, timeout: int = 900) -> str:
 
 def main() -> None:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    subprocess.run(
-        ["python", "frontend/bigscreen-assets/patch_bigscreen_runtime.py"],
-        cwd=PROJECT_ROOT,
-        check=True,
-    )
     paths = deployment_paths()
     archive = build_archive(timestamp, paths)
     remote_archive = f"/tmp/{archive.name}"
@@ -115,7 +108,7 @@ def main() -> None:
             client,
             "tar --ignore-failed-read -czf "
             f"{shlex.quote(backup)} -C {shlex.quote(REMOTE_ROOT)} "
-            + " ".join(shlex.quote(path) for path in paths),
+            "README.md docker-compose.yml backend frontend",
         )
         run(client, f"test -s {shlex.quote(backup)}")
 
@@ -139,23 +132,18 @@ def main() -> None:
         )
         run(
             client,
-            f"docker cp {shlex.quote(REMOTE_ROOT)}/frontend/bigscreen-assets/bigscreen-index-v5.html "
+            f"docker cp {shlex.quote(REMOTE_ROOT)}/frontend/index.html "
             "bigscreen-nginx:/usr/share/nginx/html/index.html",
         )
         run(
             client,
-            f"docker cp {shlex.quote(REMOTE_ROOT)}/frontend/bigscreen-assets/bigscreen-index-v5.html "
+            f"docker cp {shlex.quote(REMOTE_ROOT)}/frontend/bigscreen-index-v5.html "
             "bigscreen-nginx:/usr/share/nginx/html/bigscreen-index-v5.html",
         )
         run(
             client,
-            f"docker cp {shlex.quote(REMOTE_ROOT)}/frontend/bigscreen-assets/bigscreen-enhancements-v5.js "
-            "bigscreen-nginx:/usr/share/nginx/html/assets/bigscreen-enhancements-v5.js",
-        )
-        run(
-            client,
-            f"docker cp {shlex.quote(REMOTE_ROOT)}/frontend/bigscreen-assets/index-C5sOsRGW-api-usage-incremental-v1.js "
-            "bigscreen-nginx:/usr/share/nginx/html/assets/index-C5sOsRGW-api-usage-incremental-v1.js",
+            f"docker cp {shlex.quote(REMOTE_ROOT)}/frontend/assets/. "
+            "bigscreen-nginx:/usr/share/nginx/html/assets/",
         )
         run(client, "docker exec bigscreen-nginx nginx -t")
         run(client, "docker exec bigscreen-nginx nginx -s reload")
