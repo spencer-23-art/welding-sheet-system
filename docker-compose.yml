@@ -15,6 +15,7 @@ services:
 
   backend:
     build: ./backend
+    image: welding-sheet-system-backend:latest
     environment:
       DATABASE_URL: postgresql+psycopg2://welding:${POSTGRES_PASSWORD:-welding123}@postgres:5432/welding
       JWT_SECRET: ${JWT_SECRET:-change-me-in-prod-32bytes-long}
@@ -33,12 +34,43 @@ services:
 
   frontend:
     build: ./frontend
+    image: welding-sheet-system-frontend:latest
     ports:
       - "8000:80"
     depends_on:
       - backend
     restart: unless-stopped
     mem_limit: 150m
+    cpus: 0.5
+
+  backend-2:
+    image: welding-sheet-system-backend:latest
+    environment:
+      DATABASE_URL: postgresql+psycopg2://welding:${POSTGRES_PASSWORD:-welding123}@postgres:5432/welding_2
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-prod-32bytes-long-2}
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+      REFRESH_TOKEN_EXPIRE_DAYS: "7"
+      SUPERADMIN_USERNAME: admin
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-Admin@123456}
+      SUPERADMIN_EMAIL: admin@example.com
+      CORS_ORIGINS: '["*"]'
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    mem_limit: 250m
+    cpus: 0.5
+
+  frontend-2:
+    image: welding-sheet-system-frontend:latest
+    ports:
+      - "8001:80"
+    volumes:
+      - ./frontend/nginx-2.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend-2
+    restart: unless-stopped
+    mem_limit: 80m
     cpus: 0.5
 
 volumes:

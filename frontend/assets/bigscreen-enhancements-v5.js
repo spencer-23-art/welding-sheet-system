@@ -45,11 +45,20 @@ const state = {
     heatTreatmentError: '',
     heatTreatmentRevision: 0,
     heatTreatmentQueries: { complete: '', pending: '' },
+    auditListQueries: { issues: '', closure: '', unreviewed: '' },
     manualSyncing: false,
     manualSyncStatus: 'idle',
     manualSyncResetTimer: 0,
+    pipelinesData: null,
+    pipelinesCheckedAt: 0,
   }
   const normalize = (value) => String(value || '').trim().toLocaleLowerCase('zh-CN')
+  const loopOffset = (value, distance) => ((value % distance) + distance) % distance
+
+  function wheelDelta(event) {
+    const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1
+    return Number(event.deltaY || 0) * multiplier
+  }
 
   function showManualSyncMessage(type, message) {
     let notice = document.querySelector('[data-manual-sync-notice]')
@@ -352,13 +361,19 @@ function syncSheetTitle() {
     const stop = track?._stopContinuousScroll
     if (typeof stop === 'function') stop()
     if (!track) return
+    if (track._continuousScrollWheelTarget && track._continuousScrollWheelHandler) {
+      track._continuousScrollWheelTarget.removeEventListener('wheel', track._continuousScrollWheelHandler)
+    }
     delete track._stopContinuousScroll
     delete track._continuousScrollActive
+    delete track._continuousScrollManualPause
+    delete track._continuousScrollWheelTarget
+    delete track._continuousScrollWheelHandler
     delete track.dataset.continuousScroller
     track.style.removeProperty('transform')
   }
 
-  function syncContinuousScroll({ hoverTarget, viewport, track, original, activeClass }) {
+  function syncContinuousScroll({ hoverTarget, viewport, track, original, activeClass, pauseAutoScroll = false }) {
     if (!hoverTarget || !viewport || !track || !original) return
 
     const shouldScroll = viewport.clientHeight > 0 && original.scrollHeight > viewport.clientHeight + 1
@@ -382,13 +397,35 @@ function syncSheetTitle() {
       track.appendChild(clone)
     }
     hoverTarget.classList.add(activeClass)
-    if (track._continuousScrollActive) return
+    if (track._continuousScrollActive) {
+      track._continuousScrollManualPause = pauseAutoScroll
+      return
+    }
 
     track._continuousScrollActive = true
+    track._continuousScrollManualPause = pauseAutoScroll
     track.dataset.continuousScroller = 'true'
+    viewport.title = '悬停暂停自动滚动；滚动鼠标滚轮可手动查看'
     let offset = 0
     let previousFrame = performance.now()
     let frame = 0
+    const moveBy = (delta) => {
+      const distance = original.getBoundingClientRect().height
+      if (distance <= 0) return
+      offset = loopOffset(offset + delta, distance)
+      previousFrame = performance.now()
+      track.style.transform = `translate3d(0, -${offset.toFixed(3)}px, 0)`
+    }
+    const onWheel = (event) => {
+      if (event.ctrlKey) return
+      const delta = wheelDelta(event)
+      if (!delta) return
+      event.preventDefault()
+      moveBy(delta)
+    }
+    viewport.addEventListener('wheel', onWheel, { passive: false })
+    track._continuousScrollWheelTarget = viewport
+    track._continuousScrollWheelHandler = onWheel
     const tick = (now) => {
       if (!hoverTarget.isConnected || !viewport.isConnected || !track.isConnected || !original.isConnected) {
         stopContinuousScroll(track)
@@ -398,14 +435,29 @@ function syncSheetTitle() {
       const distance = original.getBoundingClientRect().height
       const elapsed = Math.min(100, Math.max(0, now - previousFrame))
       previousFrame = now
-      if (distance > 0 && !hoverTarget.matches(':hover')) {
-        offset = (offset + (elapsed * CONTINUOUS_SCROLL_SPEED) / 1000) % distance
-        track.style.transform = `translate3d(0, -${offset.toFixed(3)}px, 0)`
+      if (distance > 0 && !hoverTarget.matches(':hover') && !track._continuousScrollManualPause) {
+        moveBy((elapsed * CONTINUOUS_SCROLL_SPEED) / 1000)
       }
       frame = requestAnimationFrame(tick)
     }
     track._stopContinuousScroll = () => window.cancelAnimationFrame(frame)
     frame = requestAnimationFrame(tick)
+  }
+
+  function wireNativeNgWheel(panel) {
+    const { viewport, rowList } = getRows(panel)
+    if (!viewport || !rowList || viewport.dataset.nativeLoopWheel === 'true') return
+    viewport.dataset.nativeLoopWheel = 'true'
+    viewport.title = '悬停暂停自动滚动；滚动鼠标滚轮可手动查看'
+    viewport.addEventListener('wheel', (event) => {
+      if (event.ctrlKey) return
+      const delta = wheelDelta(event)
+      const currentList = viewport.firstElementChild || rowList
+      const loopHeight = currentList.scrollHeight / 2
+      if (!delta || loopHeight <= viewport.clientHeight) return
+      event.preventDefault()
+      viewport.scrollTop = loopOffset(viewport.scrollTop + delta, loopHeight)
+    }, { passive: false })
   }
 
   function updateAuditScroll(value) {
@@ -740,7 +792,43 @@ function syncSheetTitle() {
     return wrap
   }
 
-  function buildAuditIssueScroller(issues, card) {
+  function matchesAuditListQuery(item, query) {
+    if (!query) return true
+    return Object.values(item || {}).some((value) => normalize(value).includes(query))
+  }
+
+  function buildAuditListSearch(card, listKey) {
+    const labels = {
+      issues: '搜索审核问题',
+      closure: '搜索未闭环焊口',
+      unreviewed: '搜索未审核底片',
+    }
+    const search = createElement('label', 'audit-list-search')
+    search.dataset.auditListSearch = listKey
+    search.setAttribute('aria-label', labels[listKey] || '搜索清单')
+    const input = document.createElement('input')
+    input.type = 'search'
+    input.placeholder = '搜索管线 / 焊口'
+    input.value = state.auditListQueries[listKey] || ''
+    input.setAttribute('aria-label', `${labels[listKey] || '搜索清单'}的管线号、焊口号或状态`)
+    input.addEventListener('input', () => {
+      const cursor = input.selectionStart
+      state.auditListQueries[listKey] = input.value
+      state.qualityRenderKey = ''
+      renderQualityPage()
+      requestAnimationFrame(() => {
+        const nextInput = card.ownerDocument.querySelector(`[data-audit-list-search="${listKey}"] input`)
+        if (!nextInput) return
+        nextInput.focus({ preventScroll: true })
+        const position = Math.min(Number(cursor || 0), nextInput.value.length)
+        nextInput.setSelectionRange(position, position)
+      })
+    })
+    search.appendChild(input)
+    return search
+  }
+
+  function buildAuditIssueScroller(issues, card, pauseAutoScroll = false) {
     const scroller = createElement('div', 'quality-audit-issue-scroller')
     const header = createElement('div', 'quality-audit-issue-row is-header')
     ;['管线号', '焊口号', '审核问题', '审核状态'].forEach((label) => header.appendChild(createElement('span', '', label)))
@@ -767,11 +855,12 @@ function syncSheetTitle() {
       track,
       original: list,
       activeClass: 'is-scrolling',
+      pauseAutoScroll,
     }))
     return scroller
   }
 
-  function buildUnreviewedFilmScroller(rows, card) {
+  function buildUnreviewedFilmScroller(rows, card, pauseAutoScroll = false) {
     const scroller = createElement('div', 'quality-unreviewed-film-scroller')
     const header = createElement('div', 'quality-unreviewed-film-row is-header')
     ;['管线号', '焊口号', 'AH 审核状态'].forEach((label) => header.appendChild(createElement('span', '', label)))
@@ -797,11 +886,12 @@ function syncSheetTitle() {
       track,
       original: list,
       activeClass: 'is-unreviewed-scrolling',
+      pauseAutoScroll,
     }))
     return scroller
   }
 
-  function buildClosureScroller(cases, card) {
+  function buildClosureScroller(cases, card, pauseAutoScroll = false) {
     const scroller = createElement('div', 'quality-closure-scroller')
     const summary = createElement('div', 'quality-closure-summary')
     summary.append(
@@ -836,11 +926,12 @@ function syncSheetTitle() {
       track,
       original: list,
       activeClass: 'is-closure-scrolling',
+      pauseAutoScroll,
     }))
     return scroller
   }
 
-  function buildHeatTreatmentScroller(joints, card, status) {
+  function buildHeatTreatmentScroller(joints, card, status, pauseAutoScroll = false) {
     const scroller = createElement('div', 'heat-treatment-scroller')
     const header = createElement('div', 'heat-treatment-row is-header')
     ;['管线号', '焊口号', '日期', '焊缝硬度值', '母材硬度值', '热影响区硬度值', '热处理操作人'].forEach((label) => {
@@ -890,6 +981,7 @@ function syncSheetTitle() {
       track,
       original: list,
       activeClass: 'is-heat-treatment-scrolling',
+      pauseAutoScroll,
     }))
     return scroller
   }
@@ -1162,28 +1254,46 @@ function syncSheetTitle() {
     const issues = Array.isArray(audit.issues) ? audit.issues : []
     const unreviewedFilms = Array.isArray(audit.unreviewed_films) ? audit.unreviewed_films : []
     const unresolvedCases = Array.isArray(repair.unresolved_cases) ? repair.unresolved_cases : []
+    const issueQuery = normalize(state.auditListQueries.issues)
+    const closureQuery = normalize(state.auditListQueries.closure)
+    const unreviewedQuery = normalize(state.auditListQueries.unreviewed)
+    const visibleIssues = issues.filter((item) => matchesAuditListQuery(item, issueQuery))
+    const visibleClosureCases = unresolvedCases.filter((item) => matchesAuditListQuery(item, closureQuery))
+    const visibleUnreviewedFilms = unreviewedFilms.filter((item) => matchesAuditListQuery(item, unreviewedQuery))
     const body = createElement('div', 'quality-layout quality-layout-audit')
-    const closure = buildCard('探伤不合格闭环', `X 不合格 · Y / AA 未通过 · 共 ${number(repair.unresolved_failures)} 道`)
+    const closureSummary = closureQuery
+      ? `匹配 ${visibleClosureCases.length} / 共 ${number(repair.unresolved_failures)} 道`
+      : `X 不合格 · Y / AA 未通过 · 共 ${number(repair.unresolved_failures)} 道`
+    const closure = buildCard('探伤不合格闭环', closureSummary)
     closure.card.classList.add('quality-closure-card')
-    if (unresolvedCases.length) {
-      closure.body.appendChild(buildClosureScroller(unresolvedCases, closure.card))
+    closure.header.appendChild(buildAuditListSearch(closure.card, 'closure'))
+    if (visibleClosureCases.length) {
+      closure.body.appendChild(buildClosureScroller(visibleClosureCases, closure.card, Boolean(closureQuery)))
     } else {
-      closure.body.appendChild(createElement('div', 'quality-empty', '暂无待处理 / 未闭环焊口'))
+      closure.body.appendChild(createElement('div', 'quality-empty', closureQuery ? '未找到匹配的未闭环焊口' : '暂无待处理 / 未闭环焊口'))
     }
 
-    const issueCard = buildCard('审核问题清单', `共 ${number(audit.issue_count)} 条，全部展示`)
+    const issueSummary = issueQuery
+      ? `匹配 ${visibleIssues.length} / 共 ${number(audit.issue_count)} 条`
+      : `共 ${number(audit.issue_count)} 条，全部展示`
+    const issueCard = buildCard('审核问题清单', issueSummary)
     issueCard.card.classList.add('quality-audit-issue-card')
-    if (issues.length) {
-      issueCard.body.appendChild(buildAuditIssueScroller(issues, issueCard.card))
+    issueCard.header.appendChild(buildAuditListSearch(issueCard.card, 'issues'))
+    if (visibleIssues.length) {
+      issueCard.body.appendChild(buildAuditIssueScroller(visibleIssues, issueCard.card, Boolean(issueQuery)))
     } else {
-      issueCard.body.appendChild(createElement('div', 'quality-empty', '暂无审核问题记录'))
+      issueCard.body.appendChild(createElement('div', 'quality-empty', issueQuery ? '未找到匹配的审核问题' : '暂无审核问题记录'))
     }
-    const unreviewedCard = buildCard('未审核底片清单', `AH 列为空 · 共 ${number(audit.unreviewed_count)} 道`)
+    const unreviewedSummary = unreviewedQuery
+      ? `匹配 ${visibleUnreviewedFilms.length} / 共 ${number(audit.unreviewed_count)} 道`
+      : `AH 列为空 · 共 ${number(audit.unreviewed_count)} 道`
+    const unreviewedCard = buildCard('未审核底片清单', unreviewedSummary)
     unreviewedCard.card.classList.add('quality-unreviewed-film-card')
-    if (unreviewedFilms.length) {
-      unreviewedCard.body.appendChild(buildUnreviewedFilmScroller(unreviewedFilms, unreviewedCard.card))
+    unreviewedCard.header.appendChild(buildAuditListSearch(unreviewedCard.card, 'unreviewed'))
+    if (visibleUnreviewedFilms.length) {
+      unreviewedCard.body.appendChild(buildUnreviewedFilmScroller(visibleUnreviewedFilms, unreviewedCard.card, Boolean(unreviewedQuery)))
     } else {
-      unreviewedCard.body.appendChild(createElement('div', 'quality-empty', '暂无未审核底片'))
+      unreviewedCard.body.appendChild(createElement('div', 'quality-empty', unreviewedQuery ? '未找到匹配的未审核底片' : '暂无未审核底片'))
     }
     body.append(issueCard.card, closure.card, unreviewedCard.card)
     appendQualityPage(page, '无损检测与审核分析', '', [
@@ -1231,7 +1341,7 @@ function syncSheetTitle() {
     completedCard.card.classList.add('heat-treatment-list-card', 'heat-treatment-completed-card')
     completedCard.header.appendChild(buildHeatTreatmentSearch(completedCard.card, 'complete'))
     if (completedJoints.length) {
-      completedCard.body.appendChild(buildHeatTreatmentScroller(completedJoints, completedCard.card, 'complete'))
+      completedCard.body.appendChild(buildHeatTreatmentScroller(completedJoints, completedCard.card, 'complete', Boolean(completeQuery)))
     } else {
       completedCard.body.appendChild(createElement('div', 'heat-treatment-empty', completeQuery ? '未找到匹配的已热处理焊口' : '暂无已热处理焊口'))
     }
@@ -1239,7 +1349,7 @@ function syncSheetTitle() {
     pendingCard.card.classList.add('heat-treatment-list-card', 'heat-treatment-pending-card')
     pendingCard.header.appendChild(buildHeatTreatmentSearch(pendingCard.card, 'pending'))
     if (pendingJoints.length) {
-      pendingCard.body.appendChild(buildHeatTreatmentScroller(pendingJoints, pendingCard.card, 'pending'))
+      pendingCard.body.appendChild(buildHeatTreatmentScroller(pendingJoints, pendingCard.card, 'pending', Boolean(pendingQuery)))
     } else {
       pendingCard.body.appendChild(createElement('div', 'heat-treatment-empty', pendingQuery ? '未找到匹配的未热处理焊口' : '暂无未热处理焊口'))
     }
@@ -1437,6 +1547,7 @@ function syncSheetTitle() {
 
   function refresh() {
     state.scheduled = false
+    requestPipelinesData()
     syncSheetTitle()
     syncDailyApiUsage()
     syncManualSyncButton()
@@ -1457,11 +1568,201 @@ function syncSheetTitle() {
     ngPanel.style.flex = '1 1 100%'
     ngPanel.style.minWidth = '0'
     applyDetailLayout(ngPanel)
+    wireNativeNgWheel(ngPanel)
     const controls = ensureControls(ngPanel)
     const total = applySearch(ngPanel)
     const totalNode = controls?.querySelector('[data-ng-total]')
     const label = `不合格焊口总量：${total} 道`
     if (totalNode && totalNode.textContent !== label) totalNode.textContent = label
+  }
+
+  function requestPipelinesData() {
+    const now = Date.now()
+    if (now - state.pipelinesCheckedAt < 10000 && state.pipelinesData) return
+    state.pipelinesCheckedAt = now
+    fetch('/api/pipelines')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data)) {
+          state.pipelinesData = data
+        }
+      })
+      .catch(() => {})
+  }
+
+  function getProjectNdtBenchmark(pipelines) {
+    let totalRequired = 0
+    let totalCompleted = 0
+    let totalFailed = 0
+    let totalJoints = 0
+    let totalWelded = 0
+    for (const p of pipelines) {
+      totalRequired += Number(p.required_ndt || 0)
+      totalCompleted += Number(p.completed_ndt || 0)
+      totalFailed += Number(p.ndt_failed || 0)
+      totalJoints += Number(p.total_joints || 0)
+      totalWelded += Number(p.completed_welds || 0)
+    }
+    const overallRate = totalRequired > 0
+      ? ((totalCompleted / totalRequired) * 100).toFixed(1)
+      : '100.0'
+    return {
+      totalRequired,
+      totalCompleted,
+      totalFailed,
+      overallRate,
+      totalJoints,
+      totalWelded,
+    }
+  }
+
+  let pipelineTooltipNode = null
+
+  function ensurePipelineTooltip() {
+    if (pipelineTooltipNode && document.body.contains(pipelineTooltipNode)) {
+      return pipelineTooltipNode
+    }
+    pipelineTooltipNode = document.createElement('div')
+    pipelineTooltipNode.id = 'pipeline-ndt-hover-card'
+    pipelineTooltipNode.className = 'pipeline-hover-card'
+    document.body.appendChild(pipelineTooltipNode)
+    return pipelineTooltipNode
+  }
+
+  function renderPipelineTooltip(card, p, pipelines) {
+    const benchmark = getProjectNdtBenchmark(pipelines)
+    const ndtRate = (Number(p.ndt_completion_rate || 0) * 100).toFixed(1)
+    const weldRate = (Number(p.weld_completion_rate || 0) * 100).toFixed(1)
+    const ratioText = (Number(p.ndt_ratio || 0) * 100).toFixed(0)
+
+    card.innerHTML = [
+      '<div class="p-tip-header">',
+      '  <div class="p-tip-title">',
+      `    <span class="p-tip-name">${p.pipeline_no}</span>`,
+      '    <span class="p-tip-badge">监控中</span>',
+      '  </div>',
+      `  <span class="p-tip-ratio">探伤比例: <b>${ratioText}%</b></span>`,
+      '</div>',
+      '<div class="p-tip-ndt-section">',
+      '  <div class="p-tip-sec-title">',
+      '    <span class="p-tip-sec-dot"></span>',
+      '    探伤与检测指标',
+      '  </div>',
+      '  <div class="p-tip-grid">',
+      '    <div class="p-tip-cell">',
+      '      <span class="lbl">应探伤数</span>',
+      `      <span class="val highlight">${p.required_ndt} <small>口</small></span>`,
+      '    </div>',
+      '    <div class="p-tip-cell">',
+      '      <span class="lbl">已探伤数</span>',
+      `      <span class="val purple">${p.completed_ndt} <small>口</small></span>`,
+      '    </div>',
+      '    <div class="p-tip-cell">',
+      '      <span class="lbl">探伤完成率</span>',
+      `      <span class="val green">${ndtRate}%</span>`,
+      '    </div>',
+      '    <div class="p-tip-cell">',
+      '      <span class="lbl">探伤不合格</span>',
+      `      <span class="val ${p.ndt_failed > 0 ? 'danger' : 'normal'}">${p.ndt_failed} <small>处</small></span>`,
+      '    </div>',
+      '  </div>',
+      '  <div class="p-tip-progress-wrap">',
+      `    <div class="p-tip-progress-bar" style="width: ${Math.min(100, Math.max(0, ndtRate))}%;"></div>`,
+      '  </div>',
+      '</div>',
+      '<div class="p-tip-weld-row">',
+      `  <span>焊口总数: <b>${p.total_joints}</b></span>`,
+      `  <span>已焊: <b>${p.completed_welds}</b></span>`,
+      `  <span>焊接率: <b class="cyan">${weldRate}%</b></span>`,
+      '</div>',
+      '<div class="p-tip-summary-section">',
+      '  <div class="p-tip-sum-title">★ 全项目探伤整体汇总</div>',
+      '  <div class="p-tip-sum-row">',
+      `    <div>全线总应探: <b>${benchmark.totalRequired}</b> 口</div>`,
+      `    <div>全线总已探: <b class="purple">${benchmark.totalCompleted}</b> 口</div>`,
+      '  </div>',
+      '  <div class="p-tip-sum-rate">',
+      '    <span>整体探伤完成率:</span>',
+      `    <span class="sum-rate-val">${benchmark.overallRate}%</span>`,
+      '  </div>',
+      '</div>',
+    ].join('')
+  }
+
+  function positionPipelineTooltip(card, clientX, clientY) {
+    const pad = 16
+    const cardWidth = 320
+    const cardHeight = card.offsetHeight || 220
+
+    let x = clientX + pad
+    let y = clientY - 20
+
+    if (x + cardWidth > window.innerWidth - 12) {
+      x = clientX - cardWidth - pad
+    }
+    if (y + cardHeight > window.innerHeight - 12) {
+      y = window.innerHeight - cardHeight - 12
+    }
+    if (y < 12) y = 12
+    if (x < 12) x = 12
+
+    card.style.left = `${x}px`
+    card.style.top = `${y}px`
+  }
+
+  function initPipelineHoverListeners() {
+    let currentHoverPipeline = null
+
+    document.addEventListener('mouseover', (e) => {
+      const item = e.target.closest('.rank-item-hover')
+      if (!item) return
+
+      const pipelines = state.pipelinesData
+      if (!Array.isArray(pipelines) || !pipelines.length) {
+        requestPipelinesData()
+        return
+      }
+
+      let pno = ''
+      const spans = item.querySelectorAll('span')
+      for (const s of spans) {
+        const txt = s.textContent.trim()
+        if (pipelines.some((p) => p.pipeline_no === txt)) {
+          pno = txt
+          break
+        }
+      }
+      if (!pno) return
+
+      const target = pipelines.find((p) => p.pipeline_no === pno)
+      if (!target) return
+
+      currentHoverPipeline = pno
+      const card = ensurePipelineTooltip()
+      renderPipelineTooltip(card, target, pipelines)
+      positionPipelineTooltip(card, e.clientX, e.clientY)
+      card.classList.add('is-visible')
+    })
+
+    document.addEventListener('mousemove', (e) => {
+      if (!currentHoverPipeline) return
+      const card = ensurePipelineTooltip()
+      if (card.classList.contains('is-visible')) {
+        positionPipelineTooltip(card, e.clientX, e.clientY)
+      }
+    })
+
+    document.addEventListener('mouseout', (e) => {
+      const item = e.target.closest('.rank-item-hover')
+      if (!item) return
+      const related = e.relatedTarget ? e.relatedTarget.closest('.rank-item-hover') : null
+      if (related === item) return
+
+      currentHoverPipeline = null
+      if (pipelineTooltipNode) {
+        pipelineTooltipNode.classList.remove('is-visible')
+      }
+    })
   }
 
   function scheduleRefresh() {
@@ -1561,6 +1862,13 @@ function syncSheetTitle() {
       .is-audit-dashboard .quality-card-header h3 { font-size: 11px; }
       .is-audit-dashboard .quality-card-header span { font-size: 8px; }
       .is-audit-dashboard .quality-card-body { padding: 3px 7px 5px; }
+      .is-audit-dashboard .quality-card-header > div:first-child { min-width: 0; flex: 1 1 auto; }
+      .is-audit-dashboard .quality-card-header h3, .is-audit-dashboard .quality-card-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .audit-list-search { display: flex; flex: 0 0 auto; align-items: center; margin-left: 5px; }
+      .audit-list-search::before { margin-right: 5px; color: #34eefa; content: '⌕'; font-size: 13px; line-height: 1; text-shadow: 0 0 8px rgba(45, 238, 250, .7); }
+      .audit-list-search input { width: 100px; height: 21px; border: 1px solid rgba(37, 223, 241, .34); outline: 0; background: rgba(1, 13, 28, .78); color: #e5fbff; padding: 0 6px; font-size: 9px; letter-spacing: .15px; transition: border-color .18s ease, box-shadow .18s ease; }
+      .audit-list-search input::placeholder { color: #55788d; }
+      .audit-list-search input:focus { border-color: #00f2fe; box-shadow: 0 0 8px rgba(0, 242, 254, .3); }
       .quality-analysis-page.is-pipeline-dashboard { gap: 9px; background: radial-gradient(ellipse at 20% 0, rgba(0, 229, 255, .12), transparent 35%), radial-gradient(ellipse at 82% 100%, rgba(117, 73, 255, .1), transparent 42%), #030914; }
       .is-pipeline-dashboard .quality-analysis-header { min-height: 40px; padding: 0 11px 7px 14px; border-bottom-color: rgba(74, 228, 255, .36); background: linear-gradient(90deg, rgba(0, 225, 255, .11), rgba(0, 76, 141, .1) 46%, transparent); }
       .is-pipeline-dashboard .quality-analysis-heading h2 { font-size: 20px; letter-spacing: 2.8px; }
@@ -1777,12 +2085,64 @@ function syncSheetTitle() {
         .quality-scan-list { grid-template-columns: 1fr; }
         .quality-scan-row { grid-template-columns: minmax(56px, .8fr) minmax(60px, 1fr) 48px; gap: 6px; }
       }
+      .pipeline-hover-card {
+        position: fixed;
+        z-index: 999999;
+        pointer-events: none;
+        width: 320px;
+        background: rgba(4, 11, 30, 0.95);
+        border: 1px solid rgba(0, 242, 254, 0.45);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85), 0 0 20px rgba(0, 242, 254, 0.25);
+        border-radius: 6px;
+        padding: 13px 15px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
+        color: #e2e8f0;
+        backdrop-filter: blur(12px);
+        box-sizing: border-box;
+        display: none;
+        opacity: 0;
+        transition: opacity 0.12s ease-out;
+      }
+      .pipeline-hover-card.is-visible { display: block; opacity: 1; }
+      .p-tip-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 242, 254, 0.2); padding-bottom: 8px; margin-bottom: 9px; }
+      .p-tip-title { display: flex; align-items: center; gap: 7px; }
+      .p-tip-name { font-size: 15px; font-weight: 700; color: #00f2fe; letter-spacing: 0.5px; }
+      .p-tip-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35); }
+      .p-tip-ratio { font-size: 11px; color: #94a3b8; }
+      .p-tip-ratio b { color: #f1f5f9; }
+      .p-tip-ndt-section { background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 5px; padding: 9px 10px; margin-bottom: 9px; }
+      .p-tip-sec-title { font-size: 11px; font-weight: 600; color: #c4b5fd; margin-bottom: 7px; display: flex; align-items: center; gap: 5px; }
+      .p-tip-sec-dot { width: 5px; height: 5px; border-radius: 50%; background: #a78bfa; box-shadow: 0 0 6px #a78bfa; }
+      .p-tip-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; font-size: 11px; }
+      .p-tip-cell { display: flex; justify-content: space-between; align-items: center; }
+      .p-tip-cell .lbl { color: #94a3b8; }
+      .p-tip-cell .val { font-weight: 600; color: #fff; font-family: "Share Tech Mono", monospace; }
+      .p-tip-cell .val.highlight { color: #38bdf8; }
+      .p-tip-cell .val.purple { color: #c084fc; }
+      .p-tip-cell .val.green { color: #10b981; }
+      .p-tip-cell .val.danger { color: #f43f5e; font-weight: 700; }
+      .p-tip-cell .val.normal { color: #10b981; }
+      .p-tip-cell small { font-size: 10px; font-weight: normal; color: #94a3b8; margin-left: 2px; }
+      .p-tip-progress-wrap { margin-top: 8px; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden; }
+      .p-tip-progress-bar { height: 100%; background: linear-gradient(90deg, #818cf8, #a855f7); transition: width 0.25s ease-out; }
+      .p-tip-weld-row { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-bottom: 9px; padding: 0 2px; }
+      .p-tip-weld-row b { color: #f1f5f9; }
+      .p-tip-weld-row b.cyan { color: #00f2fe; }
+      .p-tip-summary-section { border-top: 1px dashed rgba(255, 255, 255, 0.12); padding-top: 8px; font-size: 11px; }
+      .p-tip-sum-title { font-size: 10px; color: #64748b; margin-bottom: 5px; font-weight: 500; }
+      .p-tip-sum-row { display: flex; justify-content: space-between; color: #cbd5e1; margin-bottom: 4px; }
+      .p-tip-sum-row b { color: #fff; }
+      .p-tip-sum-row b.purple { color: #c084fc; }
+      .p-tip-sum-rate { display: flex; justify-content: space-between; align-items: center; color: #94a3b8; }
+      .p-tip-sum-rate .sum-rate-val { font-size: 12px; font-weight: 700; color: #38bdf8; font-family: "Share Tech Mono", monospace; }
     `
     document.head.appendChild(style)
   }
 
   function start() {
     addStyles()
+    initPipelineHoverListeners()
+    requestPipelinesData()
     scheduleRefresh()
     // React updates the auto-scroll offset by changing an inline `style`
     // attribute.  Watching only inserted rows lets that later write resume the
