@@ -1594,6 +1594,8 @@ function syncSheetTitle() {
     let totalRequired = 0
     let totalCompleted = 0
     let effectiveCompleted = 0
+    let totalExcess = 0
+    let totalRemaining = 0
     let totalFailed = 0
     let totalJoints = 0
     let totalWelded = 0
@@ -1603,6 +1605,11 @@ function syncSheetTitle() {
       totalRequired += req
       totalCompleted += done
       effectiveCompleted += Math.min(done, req)
+      if (done > req) {
+        totalExcess += done - req
+      } else if (req > done) {
+        totalRemaining += req - done
+      }
       totalFailed += Number(p.ndt_failed || 0)
       totalJoints += Number(p.total_joints || 0)
       totalWelded += Number(p.completed_welds || 0)
@@ -1613,6 +1620,8 @@ function syncSheetTitle() {
     return {
       totalRequired,
       totalCompleted,
+      totalExcess,
+      totalRemaining,
       totalFailed,
       overallRate,
       totalJoints,
@@ -1684,6 +1693,10 @@ function syncSheetTitle() {
       '  <div class="p-tip-sum-row">',
       `    <div>全线总应探: <b>${benchmark.totalRequired}</b> 口</div>`,
       `    <div>全线总已探: <b class="purple">${benchmark.totalCompleted}</b> 口</div>`,
+      '  </div>',
+      '  <div class="p-tip-sum-row">',
+      `    <div>全线超探: <b class="cyan">+${benchmark.totalExcess}</b> 口</div>`,
+      `    <div>剩余未探: <b class="amber">${benchmark.totalRemaining}</b> 口</div>`,
       '  </div>',
       '  <div class="p-tip-sum-rate">',
       '    <span>整体探伤完成率:</span>',
@@ -2137,7 +2150,9 @@ function syncSheetTitle() {
       .p-tip-sum-row { display: flex; justify-content: space-between; color: #cbd5e1; margin-bottom: 4px; }
       .p-tip-sum-row b { color: #fff; }
       .p-tip-sum-row b.purple { color: #c084fc; }
-      .p-tip-sum-rate { display: flex; justify-content: space-between; align-items: center; color: #94a3b8; }
+      .p-tip-sum-row b.cyan { color: #22d3ee; }
+      .p-tip-sum-row b.amber { color: #fbbf24; }
+      .p-tip-sum-rate { display: flex; justify-content: space-between; align-items: center; color: #94a3b8; margin-top: 2px; }
       .p-tip-sum-rate .sum-rate-val { font-size: 12px; font-weight: 700; color: #38bdf8; font-family: "Share Tech Mono", monospace; }
     `
     document.head.appendChild(style)
