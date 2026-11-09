@@ -1593,18 +1593,22 @@ function syncSheetTitle() {
   function getProjectNdtBenchmark(pipelines) {
     let totalRequired = 0
     let totalCompleted = 0
+    let effectiveCompleted = 0
     let totalFailed = 0
     let totalJoints = 0
     let totalWelded = 0
     for (const p of pipelines) {
-      totalRequired += Number(p.required_ndt || 0)
-      totalCompleted += Number(p.completed_ndt || 0)
+      const req = Number(p.required_ndt || 0)
+      const done = Number(p.completed_ndt || 0)
+      totalRequired += req
+      totalCompleted += done
+      effectiveCompleted += Math.min(done, req)
       totalFailed += Number(p.ndt_failed || 0)
       totalJoints += Number(p.total_joints || 0)
       totalWelded += Number(p.completed_welds || 0)
     }
     const overallRate = totalRequired > 0
-      ? ((totalCompleted / totalRequired) * 100).toFixed(1)
+      ? Math.min(100.0, (effectiveCompleted / totalRequired) * 100).toFixed(1)
       : '100.0'
     return {
       totalRequired,
@@ -1631,7 +1635,7 @@ function syncSheetTitle() {
 
   function renderPipelineTooltip(card, p, pipelines) {
     const benchmark = getProjectNdtBenchmark(pipelines)
-    const ndtRate = (Number(p.ndt_completion_rate || 0) * 100).toFixed(1)
+    const ndtRate = Math.min(100.0, Number(p.ndt_completion_rate || 0) * 100).toFixed(1)
     const weldRate = (Number(p.weld_completion_rate || 0) * 100).toFixed(1)
     const ratioText = (Number(p.ndt_ratio || 0) * 100).toFixed(0)
 
