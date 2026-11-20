@@ -19,6 +19,7 @@ const state = {
     auditPipeline: '',
     auditIssue: '',
     auditIssues: [],
+    auditSpec: '',
     auditCheckedAt: 0,
     auditRequest: 0,
     sheetTitle: '',
@@ -529,6 +530,37 @@ function syncSheetTitle() {
     if (ndtLabel?.parentElement) ndtLabel.parentElement.style.display = 'none'
   }
 
+  function renderPipelineSpec(panel) {
+    const failedLabel = findDetailLabel(panel, ['探伤不合格数:'])
+    const failedRow = failedLabel?.parentElement
+    const ndtGrid = failedRow?.parentElement
+    const ndtCard = ndtGrid?.parentElement
+    if (!ndtCard) return
+
+    let specRow = ndtCard.querySelector('[data-pipeline-spec-row]')
+    if (!specRow) {
+      specRow = document.createElement('div')
+      specRow.dataset.pipelineSpecRow = 'true'
+      specRow.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;gap:12px;font-size:13px;margin-top:10px;padding-top:8px;border-top:1px dashed rgba(255,255,255,0.08);'
+      const lbl = document.createElement('span')
+      lbl.style.cssText = 'color:var(--text-muted);white-space:nowrap;flex-shrink:0;'
+      lbl.textContent = '焊口规格:'
+      const val = document.createElement('span')
+      val.dataset.pipelineSpecVal = 'true'
+      val.style.cssText = 'font-weight:600;color:#38bdf8;text-align:right;word-break:break-word;line-height:1.4;'
+      specRow.append(lbl, val)
+      ndtCard.appendChild(specRow)
+    }
+    const valNode = specRow.querySelector('[data-pipeline-spec-val]')
+    const fallbackSpec = Array.isArray(state.pipelinesData)
+      ? (state.pipelinesData.find((p) => p.pipeline_no === state.auditPipeline)?.spec || '')
+      : ''
+    const specText = state.auditSpec || fallbackSpec || '—'
+    if (valNode && valNode.textContent !== specText) {
+      valNode.textContent = specText
+    }
+  }
+
   function applyDetailLayout(ngPanel) {
     const detailPanel = findPanel('管线综合监控看板')
     const detailRow = detailPanel?.parentElement
@@ -558,9 +590,11 @@ function syncSheetTitle() {
       state.auditPipeline = pipeline
       state.auditIssue = ''
       state.auditIssues = []
+      state.auditSpec = ''
       state.auditCheckedAt = 0
     }
     renderAuditIssue(panel)
+    renderPipelineSpec(panel)
 
     const now = Date.now()
     if (now - state.auditCheckedAt < 15000) return
@@ -574,7 +608,9 @@ function syncSheetTitle() {
           ? detail.audit_issues.filter((item) => item?.issue)
           : []
         state.auditIssue = String(detail?.audit_issue || '').trim()
+        state.auditSpec = String(detail?.spec || '').trim()
         renderAuditIssue(panel)
+        renderPipelineSpec(panel)
       })
       .catch(() => {})
   }
@@ -1682,6 +1718,10 @@ function syncSheetTitle() {
       '  <div class="p-tip-progress-wrap">',
       `    <div class="p-tip-progress-bar" style="width: ${Math.min(100, Math.max(0, ndtRate))}%;"></div>`,
       '  </div>',
+      '  <div class="p-tip-spec-row">',
+      '    <span class="lbl">焊口规格</span>',
+      `    <span class="val spec-val">${p.spec || '—'}</span>`,
+      '  </div>',
       '</div>',
       '<div class="p-tip-weld-row">',
       `  <span>焊口总数: <b>${p.total_joints}</b></span>`,
@@ -2142,6 +2182,9 @@ function syncSheetTitle() {
       .p-tip-cell small { font-size: 10px; font-weight: normal; color: #94a3b8; margin-left: 2px; }
       .p-tip-progress-wrap { margin-top: 8px; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden; }
       .p-tip-progress-bar { height: 100%; background: linear-gradient(90deg, #818cf8, #a855f7); transition: width 0.25s ease-out; }
+      .p-tip-spec-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-top: 7px; padding-top: 6px; border-top: 1px dashed rgba(139, 92, 246, 0.25); font-size: 11px; }
+      .p-tip-spec-row .lbl { color: #94a3b8; white-space: nowrap; flex-shrink: 0; }
+      .p-tip-spec-row .spec-val { font-weight: 600; color: #38bdf8; font-family: "Share Tech Mono", monospace; text-align: right; word-break: break-word; line-height: 1.35; }
       .p-tip-weld-row { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-bottom: 9px; padding: 0 2px; }
       .p-tip-weld-row b { color: #f1f5f9; }
       .p-tip-weld-row b.cyan { color: #00f2fe; }

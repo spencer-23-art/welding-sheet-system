@@ -74,6 +74,7 @@ def _fetch_rows(db: Session, sheet_id: Optional[int] = None) -> list[dict]:
         WeldingRecord.heat_treatment_ao,
         WeldingRecord.heat_treatment_ap,
         WeldingRecord.document_id,  # 末位：供按表过滤/溯源
+        WeldingRecord.spec,
     ]
     q = db.query(*cols)
     if sheet_id is not None:
@@ -106,6 +107,7 @@ def _fetch_rows(db: Session, sheet_id: Optional[int] = None) -> list[dict]:
                 "heat_treatment_ao": clean_str(r[18]),
                 "heat_treatment_ap": clean_str(r[19]),
                 "doc_id": r[20],
+                "spec": clean_str(r[21]),
             }
         )
     return rows
@@ -273,6 +275,7 @@ def _compute(rows: list[dict]) -> dict:
             for r in grp
             if _contains_ng(r["ndt_result_1"]) or _contains_ng(r["ndt_result_2"]) or _contains_ng(r["ndt_result_3"])
         )
+        specs = list(dict.fromkeys(r["spec"] for r in grp if r.get("spec")))
         pipelines.append(
             {
                 "pipeline_no": pno,
@@ -284,6 +287,7 @@ def _compute(rows: list[dict]) -> dict:
                 "completed_ndt": cndt,
                 "ndt_completion_rate": ncr,
                 "ndt_failed": ndt_failed,
+                "spec": " / ".join(specs),
             }
         )
     pipelines.sort(key=lambda x: x["total_joints"], reverse=True)
@@ -693,6 +697,7 @@ def get_pipeline_detail(db: Session, pipeline_no: str, sheet_id: Optional[int] =
         for value in [r["actual_ndt_date"]]
         if value is not None
     ]
+    specs = list(dict.fromkeys(r["spec"] for r in grp if r.get("spec")))
     return {
         "pipeline_no": pipeline_no,
         "total_joints": tj,
@@ -704,6 +709,7 @@ def get_pipeline_detail(db: Session, pipeline_no: str, sheet_id: Optional[int] =
         "completed_ndt": cndt,
         "ndt_completion_rate": ncr,
         "ndt_failed": ndt_failed,
+        "spec": " / ".join(specs),
         "film_total": film_total,
         "film_approved": film_approved,
         "audit_issue": "\n".join(item["issue"] for item in audit_issues),

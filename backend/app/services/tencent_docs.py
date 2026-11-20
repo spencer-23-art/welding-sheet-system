@@ -48,6 +48,12 @@ _HEADER_ALIASES = {
     # 当前腾讯文档使用的施工/检测台账表头。
     "压力管道级别": "pipe_level",
     "焊口规格外径*壁厚": "spec",
+    "焊口规格（外径*壁厚）": "spec",
+    "焊口规格(外径*壁厚)": "spec",
+    "焊口规格": "spec",
+    "管道规格": "spec",
+    "管道规格（外径*壁厚）": "spec",
+    "管道规格(外径*壁厚)": "spec",
     "管道焊口材质": "material",
     "焊口变更备注": "joint_remark",
     "委托单编号": "entrust_no",
@@ -119,6 +125,8 @@ def header_to_attr(header: str) -> Optional[str]:
     # R/X/AH 等固定列号。先识别这三个会影响大屏统计的字段。
     if "焊接日期" in normalized:
         return "weld_date"
+    if "焊口规格" in normalized or "管道规格" in normalized:
+        return "spec"
     # 当前腾讯表 V 列表头为“备注实际探伤日期”；其中的实际探伤日期是
     # 大屏判断是否已经探伤的唯一日期字段。
     if "实际探伤日期" in normalized:
@@ -897,7 +905,7 @@ class TencentDocsClient:
             slot_by_column = {column: slot for slot, column in enumerate(tracked_columns)}
             for group_start, group_end in self._column_groups(tracked_columns):
                 width = group_end - group_start + 1
-                rows_per_request = max(1, self.MAX_CELLS_PER_REQUEST // width)
+                rows_per_request = max(1, min(1000, self.MAX_CELLS_PER_REQUEST // width))
                 for chunk_start in range(first_data_row, last_data_row + 1, rows_per_request):
                     chunk_end = min(last_data_row, chunk_start + rows_per_request - 1)
                     group_rows = self._fetch_range(

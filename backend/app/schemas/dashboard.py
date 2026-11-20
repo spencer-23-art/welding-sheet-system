@@ -31,6 +31,7 @@ class PipelineStats(BaseModel):
     completed_ndt: int
     ndt_completion_rate: float
     ndt_failed: int
+    spec: str = ""
 
 
 class PipelineDetail(BaseModel):
@@ -44,6 +45,7 @@ class PipelineDetail(BaseModel):
     completed_ndt: int
     ndt_completion_rate: float
     ndt_failed: int
+    spec: str = ""
     film_total: int
     film_approved: int
     audit_issue: str = ""
