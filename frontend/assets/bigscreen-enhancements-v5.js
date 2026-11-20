@@ -576,10 +576,24 @@ function syncSheetTitle() {
     ngPanel.style.maxWidth = 'calc(100% - 480px)'
   }
 
+  function ensurePipelineExportButton(panel) {
+    const header = panel.querySelector('.panel-header')
+    if (!header || header.querySelector('[data-pipeline-export-btn]')) return
+    const btn = document.createElement('a')
+    btn.dataset.pipelineExportBtn = 'true'
+    btn.className = 'pipeline-export-btn'
+    btn.href = '/api/pipelines/export'
+    btn.setAttribute('download', '')
+    btn.title = '导出管线综合监控数据（Excel .xlsx 格式）'
+    btn.textContent = '⬇ 导出 Excel'
+    header.appendChild(btn)
+  }
+
   function syncPipelineAudit() {
     const panel = findPanel('管线综合监控看板')
     if (!panel) return
 
+    ensurePipelineExportButton(panel)
     updateDetailUnit(panel, '拍片总张数:', '拍片总道数:')
     updateDetailUnit(panel, '已审核张数:', '已审核道数:')
 
@@ -2197,6 +2211,8 @@ function syncSheetTitle() {
       .p-tip-sum-row b.amber { color: #fbbf24; }
       .p-tip-sum-rate { display: flex; justify-content: space-between; align-items: center; color: #94a3b8; margin-top: 2px; }
       .p-tip-sum-rate .sum-rate-val { font-size: 12px; font-weight: 700; color: #38bdf8; font-family: "Share Tech Mono", monospace; }
+      .pipeline-export-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid rgba(0, 242, 254, 0.42); border-radius: 3px; background: rgba(0, 242, 254, 0.09); color: #38bdf8; font-size: 11px; font-weight: 600; text-decoration: none; cursor: pointer; transition: all 0.18s ease; }
+      .pipeline-export-btn:hover { background: rgba(0, 242, 254, 0.22); border-color: #00f2fe; color: #e0f2fe; box-shadow: 0 0 10px rgba(0, 242, 254, 0.3); }
     `
     document.head.appendChild(style)
   }

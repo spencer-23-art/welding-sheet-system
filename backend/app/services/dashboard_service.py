@@ -728,3 +728,196 @@ def get_dashboard_payload(db: Session, sheet_id: Optional[int] = None) -> dict:
         "ndt_ng": m["ng_list"],
         "latest_welds": m["latest_welds"],
     }
+
+
+EXPORT_HEADERS = ["管线号", "焊口总数", "已焊", "未焊", "应探", "已探", "未探", "比例"]
+
+
+def _pipeline_export_rows(pipelines: list[dict], only_required: bool = False) -> list[list]:
+    rows = []
+    for p in pipelines:
+        req = int(p.get("required_ndt") or 0)
+        if only_required and req <= 0:
+            continue
+        tj = int(p.get("total_joints") or 0)
+        cw = int(p.get("completed_welds") or 0)
+        uw = tj - cw
+        cndt = int(p.get("completed_ndt") or 0)
+        undt = req - cndt
+        ratio = float(p.get("ndt_ratio") or 0.0)
+        rows.append([
+            str(p.get("pipeline_no") or ""),
+            tj,
+            cw,
+            uw,
+            req,
+            cndt,
+            undt,
+            round(ratio, 4),
+        ])
+    return rows
+
+
+def export_pipelines_csv(
+    db: Session,
+    sheet_id: Optional[int] = None,
+    only_required: bool = True,
+) -> bytes:
+    """导出管线综合监控数据为 UTF-8 with BOM 的 CSV 字节流。"""
+    import csv
+    import io
+
+    pipelines = get_pipelines(db, sheet_id)
+    rows = _pipeline_export_rows(pipelines, only_required=only_required)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(EXPORT_HEADERS)
+    writer.writerows(rows)
+    return "\ufeff".encode("utf-8") + buf.getvalue().encode("utf-8")
+
+
+def _build_xlsx_sheet_xml(headers: list[str], rows: list[list]) -> str:
+    from xml.sax.saxutils import escape
+
+    col_letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+    xml_rows = []
+
+    # Header row (row 1, style s="1")
+    h_cells = []
+    for idx, h in enumerate(headers):
+        ref = f"{col_letters[idx]}1"
+        h_cells.append(
+            f'<c r="{ref}" s="1" t="inlineStr"><is><t>{escape(str(h))}</t></is></c>'
+        )
+    xml_rows.append(f'<row r="1" ht="22" customHeight="1">{"".join(h_cells)}</row>')
+
+    # Data rows
+    for r_idx, row in enumerate(rows, start=2):
+        cells = []
+        for c_idx, val in enumerate(row):
+            ref = f"{col_letters[c_idx]}{r_idx}"
+            if c_idx == 0:
+                cells.append(
+                    f'<c r="{ref}" s="2" t="inlineStr"><is><t>{escape(str(val))}</t></is></c>'
+                )
+            else:
+                cells.append(f'<c r="{ref}" s="2" t="n"><v>{val}</v></c>')
+        xml_rows.append(f'<row r="{r_idx}" ht="19" customHeight="1">{"".join(cells)}</row>')
+
+    last_row = max(1, len(rows) + 1)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<dimension ref="A1:H{last_row}"/>'
+        '<sheetViews><sheetView workbookViewId="0">'
+        '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+        '</sheetView></sheetViews>'
+        '<cols>'
+        '<col min="1" max="1" width="22" customWidth="1"/>'
+        '<col min="2" max="8" width="12" customWidth="1"/>'
+        '</cols>'
+        f'<sheetData>{"".join(xml_rows)}</sheetData>'
+        f'<autoFilter ref="A1:H{last_row}"/>'
+        '</worksheet>'
+    )
+
+
+def export_pipelines_xlsx(
+    db: Session,
+    sheet_id: Optional[int] = None,
+    only_required: bool = True,
+) -> bytes:
+    """导出管线综合监控数据为标准 Excel (.xlsx) 字节流（零第三方依赖）。"""
+    import io
+    import zipfile
+
+    pipelines = get_pipelines(db, sheet_id)
+    req_rows = _pipeline_export_rows(pipelines, only_required=True)
+    all_rows = _pipeline_export_rows(pipelines, only_required=False)
+
+    primary_rows = req_rows if only_required else all_rows
+    secondary_rows = all_rows if only_required else req_rows
+    primary_name = "管线综合监控" if only_required else "全部管线"
+    secondary_name = "全部管线(含免探)" if only_required else "需探伤管线"
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        '</Types>'
+    )
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '</Relationships>'
+    )
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets>'
+        f'<sheet name="{primary_name}" sheetId="1" r:id="rId1"/>'
+        f'<sheet name="{secondary_name}" sheetId="2" r:id="rId2"/>'
+        '</sheets>'
+        '</workbook>'
+    )
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        '</Relationships>'
+    )
+    styles_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<fonts count="2">'
+        '<font><sz val="11"/><name val="Microsoft YaHei"/></font>'
+        '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Microsoft YaHei"/></font>'
+        '</fonts>'
+        '<fills count="3">'
+        '<fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="gray125"/></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FF1E3A8A"/></patternFill></fill>'
+        '</fills>'
+        '<borders count="2">'
+        '<border><left/><right/><top/><bottom/><diagonal/></border>'
+        '<border>'
+        '<left style="thin"><color rgb="FFD1D5DB"/></left>'
+        '<right style="thin"><color rgb="FFD1D5DB"/></right>'
+        '<top style="thin"><color rgb="FFD1D5DB"/></top>'
+        '<bottom style="thin"><color rgb="FFD1D5DB"/></bottom>'
+        '<diagonal/>'
+        '</border>'
+        '</borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="3">'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">'
+        '<alignment horizontal="center" vertical="center"/>'
+        '</xf>'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">'
+        '<alignment vertical="center"/>'
+        '</xf>'
+        '</cellXfs>'
+        '</styleSheet>'
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", root_rels)
+        zf.writestr("xl/workbook.xml", workbook_xml)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        zf.writestr("xl/styles.xml", styles_xml)
+        zf.writestr("xl/worksheets/sheet1.xml", _build_xlsx_sheet_xml(EXPORT_HEADERS, primary_rows))
+        zf.writestr("xl/worksheets/sheet2.xml", _build_xlsx_sheet_xml(EXPORT_HEADERS, secondary_rows))
+    return buf.getvalue()
+

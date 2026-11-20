@@ -14,6 +14,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 from app.core.database import SessionLocal
 from app.schemas.dashboard import (
     DashboardKpi,
@@ -97,6 +98,32 @@ def get_dashboard(sheet_id: Optional[int] = Query(None, description="指定表�
 def get_pipelines(sheet_id: Optional[int] = Query(None, description="指定表格(document_id)则仅统计该表，缺省为全量汇总")):
     with SessionLocal() as db:
         return ds.get_pipelines(db, sheet_id)
+
+
+@router.get("/pipelines/export")
+@router.get("/export/pipelines")
+def export_pipelines(
+    sheet_id: Optional[int] = Query(None, description="指定表格(document_id)则仅统计该表，缺省为全量汇总"),
+    only_required: bool = Query(True, description="是否默认仅在首表导出需探伤管线（应探>0）"),
+    format: str = Query("xlsx", description="导出格式：xlsx 或 csv"),
+):
+    today_str = date.today().isoformat()
+    with SessionLocal() as db:
+        if format.lower() == "csv":
+            content = ds.export_pipelines_csv(db, sheet_id=sheet_id, only_required=only_required)
+            filename = f"pipeline_monitor_{today_str}.csv"
+            return Response(
+                content=content,
+                media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        content = ds.export_pipelines_xlsx(db, sheet_id=sheet_id, only_required=only_required)
+        filename = f"pipeline_monitor_{today_str}.xlsx"
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
 
 @router.get("/pipeline/{pipeline_no}", response_model=PipelineDetail)
