@@ -641,12 +641,13 @@ class TencentDocsClient:
         workbooks still obey Tencent's range limit.
         """
         column_count = max(1, min(int(source["column_count"]), 200))
-        rows_per_request = max(1, self.MAX_CELLS_PER_REQUEST // column_count)
+        rows_per_request = max(1, min(1000, self.MAX_CELLS_PER_REQUEST // column_count))
         end_column = _column_name(column_count)
         pipeline_column = int(source["pipeline_column"])
         joint_column = int(source["joint_column"])
         values: list[list] = []
         start_row = 1
+        empty_pages = 0
 
         while True:
             end_row = start_row + rows_per_request - 1
@@ -661,12 +662,21 @@ class TencentDocsClient:
             # provider returns a short page we also have a definitive end.
             if len(rows) < rows_per_request:
                 break
-            # Appended weld records are contiguous.  A blank key pair at a
-            # page boundary means this is the last populated page; continuing
-            # would burn an unnecessary API call on the empty visual grid.
-            last_row = rows[-1] if rows else []
-            if not self._row_has_record_key(last_row, pipeline_column, joint_column):
-                break
+            # Workbooks often have blank rows scattered inside active data
+            # (e.g. deleted/cancelled joints), so a single blank boundary row
+            # must NOT stop pagination.  Stop only after two consecutive pages
+            # contain zero record keys (~476+ consecutive blank rows).
+            page_has_key = any(
+                isinstance(row, list)
+                and self._row_has_record_key(row, pipeline_column, joint_column)
+                for row in rows
+            )
+            if page_has_key:
+                empty_pages = 0
+            else:
+                empty_pages += 1
+                if empty_pages >= 2:
+                    break
             start_row = end_row + 1
 
         return values
@@ -695,11 +705,27 @@ class TencentDocsClient:
         rows_per_request = max(1, min(1000, self.MAX_CELLS_PER_REQUEST // column_count))
         end_column = _column_name(column_count)
         values: list[list] = []
+        seen_data = False
+        empty_pages = 0
         for start_row in range(1, row_count + 1, rows_per_request):
             end_row = min(row_count, start_row + rows_per_request - 1)
-            values.extend(
-                self._fetch_range(file_id, selected_sheet_id, f"A{start_row}:{end_column}{end_row}")
+            chunk = self._fetch_range(
+                file_id, selected_sheet_id, f"A{start_row}:{end_column}{end_row}"
             )
+            values.extend(chunk)
+            if len(chunk) < (end_row - start_row + 1):
+                break
+            has_content = any(
+                isinstance(r, list) and any(str(c if c is not None else "").strip() for c in r)
+                for r in chunk
+            )
+            if has_content:
+                seen_data = True
+                empty_pages = 0
+            elif seen_data:
+                empty_pages += 1
+                if empty_pages >= 2:
+                    break
         return values
 
     @staticmethod
@@ -968,10 +994,11 @@ class TencentDocsClient:
         first_key_column = min(pipeline_column, joint_column)
         last_key_column = max(pipeline_column, joint_column)
         key_width = last_key_column - first_key_column + 1
-        scan_rows_per_request = max(1, self.MAX_CELLS_PER_REQUEST // key_width)
+        scan_rows_per_request = max(1, min(1000, self.MAX_CELLS_PER_REQUEST // key_width))
         newest_data_row = last_data_row
         key_start_column = _column_name(first_key_column)
         key_end_column = _column_name(last_key_column)
+        empty_key_pages = 0
 
         for chunk_start in range(start_row, row_count + 1, scan_rows_per_request):
             chunk_end = min(row_count, chunk_start + scan_rows_per_request - 1)
@@ -981,6 +1008,7 @@ class TencentDocsClient:
                 f"{key_start_column}{chunk_start}:{key_end_column}{chunk_end}",
             )
             scanned_cells += (chunk_end - chunk_start + 1) * key_width
+            page_found = False
             for offset, row in enumerate(key_rows):
                 if not isinstance(row, list):
                     continue
@@ -993,6 +1021,15 @@ class TencentDocsClient:
                     joint_column - first_key_column + 1,
                 ):
                     newest_data_row = chunk_start + offset
+                    page_found = True
+            if len(key_rows) < (chunk_end - chunk_start + 1):
+                break
+            if page_found:
+                empty_key_pages = 0
+            else:
+                empty_key_pages += 1
+                if empty_key_pages >= 2:
+                    break
 
         appended_values: list[list] = []
         appended_source_rows: list[int] = []
